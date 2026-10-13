@@ -50,7 +50,9 @@ def _request(bbox: BBox = BOSTON, *, limit: int = 1) -> PullRequest:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_earthdata_env(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+def _isolate_earthdata_env(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Keep offline tests off a developer's real .env so credentials never leak in."""
     if request.node.get_closest_marker("evals") is not None:
         return
@@ -58,6 +60,9 @@ def _isolate_earthdata_env(request: pytest.FixtureRequest, monkeypatch: pytest.M
     monkeypatch.delenv("EARTHDATA_USERNAME", raising=False)
     monkeypatch.delenv("EARTHDATA_PASSWORD", raising=False)
     monkeypatch.setattr(fldas_module, "load_dotenv", lambda *a, **k: False)
+    home = tmp_path / "no-saved-earthdata-key"
+    home.mkdir()
+    monkeypatch.setattr("atlas.agent.layout.Path.home", lambda: home)
 
 
 def _granule_item(*, granule_ur: str | None = None) -> dict[str, Any]:
@@ -564,6 +569,22 @@ async def test_extract_empty_scene_list_is_an_error() -> None:
         await client.aclose()
 
 
+class _EmptyFldasSource(FldasClient):
+    """Search returns no granules. OPeNDAP is never called."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        self._http = httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda _request: httpx.Response(500))
+        )
+        super().__init__(client=self._http, **kwargs)
+
+    async def aclose(self) -> None:
+        await self._http.aclose()
+
+    async def search(self, request: PullRequest) -> PullResult:
+        return PullResult(request=request, scenes=[])
+
+
 class _FakeFldasSource(FldasClient):
     """Search returns a fixed scene; OPeNDAP calls go to the fake transport."""
 
@@ -594,6 +615,7 @@ def _pull_args(tmp_path: Path, **overrides: Any) -> Any:
         "max_cloud_cover": None,
         "concurrency": 2,
         "search_only": False,
+        "yes": True,
         "asset": None,
         "table": None,
         "variables": None,
@@ -774,8 +796,13 @@ def test_mixed_catalog_pull_still_writes_the_fldas_table(tmp_path: Path) -> None
         asyncio.run(http.aclose())
     assert code == 0
     assert (tmp_path / "fldas.csv").exists()
-    saved = list(tmp_path.glob("**/*.tif"))
-    assert saved and saved[0].stat().st_size > 0
+    # A GeoTIFF whose server ignores Range is failed, not fetched a second time.
+    manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    sentinel = next(item for item in manifest["sources"] if item["source"] == "sentinel2")
+    assert sentinel["saved"] == []
+    assert sentinel["failed"][0]["id"] == "s2-1"
+    assert "whole object" in sentinel["failed"][0]["error"]
+    assert list(tmp_path.glob("**/*.tif")) == []
 
 
 def test_cloud_ascii_rows_become_a_yx_array() -> None:
@@ -828,6 +855,125 @@ def test_all_landsurface_resolves_to_just_fldas() -> None:
     from atlas.cli.catalog import resolve_sources
 
     assert resolve_sources("all", "landsurface") == ["fldas"]
+
+
+def test_empty_fldas_window_drops_the_previous_csv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _EmptyFldasSource(token="token")
+    _injected(monkeypatch, client)
+    table = tmp_path / "custom.csv"
+    table.write_text("longitude,latitude,time\n-71,42,2019-12-01\n", encoding="utf-8")
+    leftover = tmp_path / "fldas.csv"
+    leftover.write_text("not-the-requested-table\n", encoding="utf-8")
+    try:
+        code = run_data(_pull_args(tmp_path, table=table))
+    finally:
+        asyncio.run(client.aclose())
+    assert code == 1
+    manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    source = manifest["sources"][0]
+    assert source["saved"] == []
+    assert source["skipped"] == []
+    assert source["n_scenes"] == 0
+    assert "no FLDAS granules" in source["failed"][0]["error"]
+    assert set(source) == {
+        "source",
+        "collection",
+        "bbox",
+        "search_url",
+        "next_cursor",
+        "next_cursor_unavailable",
+        "note",
+        "error",
+        "n_scenes",
+        "scene_ids",
+        "scenes",
+        "replacements",
+        "unresolved_scenes",
+        "saved",
+        "skipped",
+        "failed",
+        "windows",
+    }
+    assert not table.exists()
+    assert (
+        table.with_name(table.name + ".stale")
+        .read_text(encoding="utf-8")
+        .startswith("longitude,latitude,time\n")
+    )
+    assert leftover.read_text(encoding="utf-8") == "not-the-requested-table\n"
+
+
+def test_refused_earthdata_token_keeps_the_previous_csv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeFldas(status=401)
+    client = _FakeFldasSource(fake, token="token")
+    _injected(monkeypatch, client)
+    table = tmp_path / "fldas.csv"
+    table.write_text("yesterday\n", encoding="utf-8")
+    try:
+        assert run_data(_pull_args(tmp_path)) == 1
+    finally:
+        asyncio.run(client.aclose())
+    assert table.read_text(encoding="utf-8") == "yesterday\n"
+    manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["sources"][0]["saved"] == []
+
+
+def test_empty_cell_window_drops_the_previous_csv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake = FakeFldas()
+    client = _FakeFldasSource(fake, token="token")
+    _injected(monkeypatch, client)
+    table = tmp_path / "fldas.csv"
+    table.write_text("yesterday\n", encoding="utf-8")
+    try:
+        assert run_data(_pull_args(tmp_path, coords="-72.0,42.2,-71.5,42.5")) == 2
+    finally:
+        asyncio.run(client.aclose())
+    assert "no X grid-cell center" in capsys.readouterr().err
+    assert not table.exists()
+    assert table.with_name(table.name + ".stale").read_text(encoding="utf-8") == "yesterday\n"
+    manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["sources"][0]["saved"] == []
+    assert "grid-cell" in manifest["sources"][0]["failed"][0]["error"]
+
+
+def test_empty_fldas_window_does_not_touch_a_table_outside_out_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _EmptyFldasSource(token="token")
+    _injected(monkeypatch, client)
+    out = tmp_path / "out"
+    out.mkdir()
+    outside = tmp_path / "custom.csv"
+    outside.write_text("yesterday\n", encoding="utf-8")
+    try:
+        assert run_data(_pull_args(out, table=outside)) == 1
+    finally:
+        asyncio.run(client.aclose())
+    assert outside.read_text(encoding="utf-8") == "yesterday\n"
+    assert not outside.with_name(outside.name + ".stale").exists()
+
+
+def test_empty_fldas_window_unlinks_a_table_symlink_without_following_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _EmptyFldasSource(token="token")
+    _injected(monkeypatch, client)
+    target = tmp_path / "secret.csv"
+    target.write_text("secret\n", encoding="utf-8")
+    table = tmp_path / "fldas.csv"
+    table.symlink_to(target)
+    try:
+        assert run_data(_pull_args(tmp_path)) == 1
+    finally:
+        asyncio.run(client.aclose())
+    assert not table.exists()
+    assert target.read_text(encoding="utf-8") == "secret\n"
 
 
 def test_empty_cell_window_is_usage_exit_2(
@@ -970,6 +1116,7 @@ def test_main_writes_a_points_table(tmp_path: Path, monkeypatch: pytest.MonkeyPa
             str(points_file),
             "--variables",
             "Evap_tavg",
+            "--yes",
         ]
     )
     assert code == 0

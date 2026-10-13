@@ -10,7 +10,16 @@ from urllib.parse import urlparse
 
 import httpx
 
-from atlas.data.base import Asset, DataPullClient, Scene
+from atlas.data.base import Asset, BBox, DataPullClient, Scene
+from atlas.data.cog import (
+    CogError,
+    CogLimitError,
+    CogMissError,
+    CogRangeError,
+    encode_cog,
+    model_bounds,
+    open_cog,
+)
 
 _SAFE_ID = re.compile(r"[^A-Za-z0-9._-]+")
 _BROWSE_KEYS = frozenset({"rendered_preview", "thumbnail", "preview"})
@@ -34,6 +43,8 @@ class DownloadOutcome:
     status: str
     path: Path | None = None
     error: str | None = None
+    bytes_read: int | None = None
+    granule_size: int | None = None
 
 
 @dataclass
@@ -75,7 +86,8 @@ def pick_asset(scene: Scene, name: str | None = None) -> tuple[str, Asset] | Non
     """Choose one native-resolution asset. Never returns a preview or thumbnail.
 
     Prefers ``visual`` (full-res RGB COG) when it is not browse, then any ``data``
-    role, then the first remaining non-browse asset. ``name`` pins a key.
+    role, then the first remaining non-browse asset. ``name`` pins a band alias
+    such as ``red``, otherwise a literal asset key.
 
     Raises:
         BrowseAssetError: if ``name`` is a preview/thumbnail key or asset.
@@ -83,12 +95,16 @@ def pick_asset(scene: Scene, name: str | None = None) -> tuple[str, Asset] | Non
     if name:
         if is_forbidden_asset_name(name):
             raise BrowseAssetError(f"{name!r} is a preview/thumbnail and cannot be downloaded")
-        asset = scene.assets.get(name)
+        # Band names are reserved and beat a literal key of the same name, so
+        # `nir` is ~865 nm everywhere. Earth Search keys B08 (0.842) as `nir`.
+        key = scene.band_aliases.get(name.strip().lower(), name)
+        asset = scene.assets.get(key)
         if asset is None:
             return None
-        if is_browse_asset(name, asset):
-            raise BrowseAssetError(f"{name!r} is a preview/thumbnail and cannot be downloaded")
-        return name, asset
+        if is_browse_asset(key, asset):
+            raise BrowseAssetError(f"{key!r} is a preview/thumbnail and cannot be downloaded")
+        # The native key, not the alias, so the filename records the band fetched.
+        return key, asset
     for key in _PREFERRED_KEYS:
         asset = scene.assets.get(key)
         if asset is not None and not is_browse_asset(key, asset):
@@ -146,11 +162,21 @@ async def download_assets(
     concurrency: int = 8,
     asset_name: str | None = None,
     on_progress: Callable[[str, int, int], None] | None = None,
+    bbox: BBox | None = None,
 ) -> DownloadReport:
     """GET one native-resolution asset per scene, streamed to disk.
 
-    Existing non-empty files are skipped. Browse assets are not downloaded.
-    A failed GET records ``failed`` and does not abort the rest.
+    Existing non-empty files are skipped, except a GeoTIFF read as a window.
+    That read is checked again: an empty window fails the scene and moves an
+    older chip aside, so it is not this request's file. A range failure, a
+    window over the read limit, and a transport error leave that chip in
+    place. Browse assets are not downloaded. A failed GET records ``failed``
+    and does not abort the rest.
+
+    When ``bbox`` is set, a geographic, Web Mercator, or WGS84 UTM Cloud
+    Optimized GeoTIFF is stored as the overlapping window. Those requests
+    use HTTP Range and do not download the rest of the granule. Any other
+    asset, including a COG in an unsupported CRS, is still fetched whole.
     """
     if asset_name and is_forbidden_asset_name(asset_name):
         raise BrowseAssetError(f"{asset_name!r} is a preview/thumbnail and cannot be downloaded")
@@ -176,6 +202,9 @@ async def download_assets(
 
     async def one(scene: Scene) -> None:
         path: Path | None = None
+        stale: Path | None = None
+        bytes_read: int | None = None
+        granule_size: int | None = None
         try:
             picked = pick_asset(scene, asset_name)
             if picked is None:
@@ -189,28 +218,75 @@ async def download_assets(
                 )
                 return
             key, asset = picked
-            dest_dir = out / scene.source
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            planned = dest_dir / scene_filename(scene.id, key, asset_suffix(asset))
-            if planned.is_file() and planned.stat().st_size > 0:
+            dest_dir = output_source_dir(out, scene.source)
+            if dest_dir is None:
                 await record(
                     DownloadOutcome(
                         source=scene.source,
                         scene_id=scene.id,
-                        status="skipped",
-                        path=planned,
+                        status="failed",
+                        error="source name is not a directory inside the output",
                     )
                 )
                 return
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            planned = dest_dir / scene_filename(scene.id, key, asset_suffix(asset))
+            window = bbox is not None and _is_geotiff_asset(asset)
+            if _nonempty_file(planned) or (window and planned.is_symlink()):
+                if not window:
+                    await record(
+                        DownloadOutcome(
+                            source=scene.source,
+                            scene_id=scene.id,
+                            status="skipped",
+                            path=planned,
+                        )
+                    )
+                    return
+                # The chip on disk may be an earlier window. A miss must not
+                # report that file as the result of this request.
+                stale = planned
             async with sem:
                 href = await _signed_href(clients.get(scene.source), asset.href)
-                async with http.stream("GET", href, follow_redirects=True) as response:
-                    response.raise_for_status()
-                    suffix = asset_suffix(asset, response.headers.get("content-type"))
-                    path = dest_dir / scene_filename(scene.id, key, suffix)
-                    with path.open("wb") as handle:
-                        async for chunk in response.aiter_bytes():
-                            handle.write(chunk)
+                windowed = await _windowed_cog(http, href, asset, bbox)
+                if windowed is not None:
+                    payload, bytes_read, granule_size = windowed
+                    path = dest_dir / scene_filename(scene.id, key, ".tif")
+                    _unlink_symlink(path)
+                    path.write_bytes(payload)
+                    _retire_previous(out, stale, path)
+                    stale = None
+                else:
+                    async with http.stream("GET", href, follow_redirects=True) as response:
+                        response.raise_for_status()
+                        suffix = asset_suffix(asset, response.headers.get("content-type"))
+                        path = dest_dir / scene_filename(scene.id, key, suffix)
+                        _unlink_symlink(path)
+                        with path.open("wb") as handle:
+                            async for chunk in response.aiter_bytes():
+                                handle.write(chunk)
+                    _retire_previous(out, stale, path)
+                    stale = None
+        except CogMissError as exc:
+            _retire_previous(out, stale, None)
+            _unlink_partial(path, stale)
+            await record(
+                DownloadOutcome(
+                    source=scene.source, scene_id=scene.id, status="failed", error=str(exc)
+                )
+            )
+            return
+        except (CogRangeError, CogLimitError) as exc:
+            # A refused range and a window over the read limit are not an
+            # empty window. The previous chip stays. A partial file from this
+            # attempt is removed.
+            _unlink_partial(path, stale)
+            await record(
+                DownloadOutcome(
+                    source=scene.source, scene_id=scene.id, status="failed", error=str(exc)
+                )
+            )
+            return
         except BrowseAssetError as exc:
             await record(
                 DownloadOutcome(
@@ -219,8 +295,7 @@ async def download_assets(
             )
             return
         except (httpx.HTTPError, OSError, TypeError) as exc:
-            if path is not None:
-                path.unlink(missing_ok=True)
+            _unlink_partial(path, stale)
             await record(
                 DownloadOutcome(
                     source=scene.source, scene_id=scene.id, status="failed", error=str(exc)
@@ -238,11 +313,154 @@ async def download_assets(
             )
             return
         await record(
-            DownloadOutcome(source=scene.source, scene_id=scene.id, status="saved", path=path)
+            DownloadOutcome(
+                source=scene.source,
+                scene_id=scene.id,
+                status="saved",
+                path=path,
+                bytes_read=bytes_read,
+                granule_size=granule_size,
+            )
         )
 
     await asyncio.gather(*(one(scene) for scene in scenes))
     return report
+
+
+def _nonempty_file(path: Path) -> bool:
+    """True when ``path`` is a file with bytes, without following a symlink."""
+    if path.is_symlink() or not path.is_file():
+        return False
+    return path.stat().st_size > 0
+
+
+def _unlink_file(path: Path | None) -> None:
+    """Remove one product file. A symlink is unlinked, not followed."""
+    if path is None:
+        return
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+
+
+def _unlink_symlink(path: Path) -> None:
+    """Unlink a destination symlink so a write does not follow it."""
+    if path.is_symlink():
+        path.unlink()
+
+
+def plain_source_name(source: str) -> bool:
+    """True when ``source`` is one path segment and not a traversal."""
+    if not source or "/" in source or "\\" in source or ".." in source:
+        return False
+    return source not in {".", ".."} and Path(source).name == source
+
+
+def inside_output(root: Path, candidate: Path) -> bool:
+    """True when ``candidate`` stays inside ``root`` after resolving symlinks.
+
+    ``root`` and its parents may be symlinks. A final symlink to a file is
+    judged by where the link sits, so the link can be unlinked in place. A
+    symlinked directory is resolved, and a path that lands outside ``root``
+    is rejected.
+    """
+    try:
+        resolved_root = root.resolve()
+        if candidate.is_symlink() and not candidate.is_dir():
+            location = candidate.parent.resolve() / candidate.name
+        else:
+            location = candidate.resolve()
+        location.relative_to(resolved_root)
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return location != resolved_root
+
+
+def output_source_dir(root: Path, source: str) -> Path | None:
+    """Return ``root/source`` when that directory cannot escape ``root``."""
+    if not plain_source_name(source):
+        return None
+    dest = root / source
+    if not inside_output(root, dest):
+        return None
+    return dest
+
+
+def retire_product(path: Path) -> None:
+    """Stop presenting one previous product without discarding its bytes.
+
+    A regular file is moved to ``<name>.stale`` beside itself. A symlink is
+    unlinked and not followed. Directories are left alone.
+    """
+    if path.is_symlink():
+        path.unlink()
+        return
+    if not path.is_file():
+        return
+    dest = path.with_name(path.name + ".stale")
+    if dest.is_symlink() or dest.is_file():
+        dest.unlink()
+    elif dest.exists():
+        return
+    path.replace(dest)
+
+
+def _retire_previous(root: Path, previous: Path | None, keep: Path | None) -> None:
+    """Move an older product aside when it is not the file just written."""
+    if previous is None or previous == keep:
+        return
+    if not inside_output(root, previous):
+        return
+    retire_product(previous)
+
+
+def _unlink_partial(path: Path | None, previous: Path | None) -> None:
+    """Remove an incomplete file from this attempt, not the previous product."""
+    if path is None or path == previous:
+        return
+    _unlink_file(path)
+
+
+def _is_geotiff_asset(asset: Asset) -> bool:
+    media = (asset.media_type or "").lower()
+    if "geotiff" in media or "tiff" in media:
+        return True
+    return Path(urlparse(asset.href).path).suffix.lower() in {".tif", ".tiff"}
+
+
+async def _windowed_cog(
+    http: httpx.AsyncClient,
+    href: str,
+    asset: Asset,
+    bbox: BBox | None,
+) -> tuple[bytes, int, int | None] | None:
+    """Return the AOI GeoTIFF, bytes read, and granule size.
+
+    None means the whole asset should be fetched. A miss is not a fallback:
+    the AOI is outside the raster, and downloading the granule would not
+    contain it. ``granule_size`` is the object size from Content-Range.
+    """
+    if bbox is None or not _is_geotiff_asset(asset):
+        return None
+    try:
+        cog = await open_cog(http, href)
+        if cog.epsg is None:
+            return None
+        bounds = model_bounds(
+            cog.epsg,
+            west=bbox.west,
+            south=bbox.south,
+            east=bbox.east,
+            north=bbox.north,
+        )
+        if bounds is None:
+            return None
+        west, south, east, north = bounds
+        read = await cog.read_window(west=west, south=south, east=east, north=north)
+    except (CogMissError, CogRangeError, CogLimitError):
+        raise
+    except (CogError, httpx.HTTPError):
+        return None
+    return encode_cog(read), read.bytes_fetched, read.granule_size
 
 
 async def _signed_href(client: DataPullClient | None, href: str) -> str:

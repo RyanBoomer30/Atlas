@@ -84,11 +84,13 @@ def test_default_registry_has_discovered_tools_only() -> None:
 
     assert "read_file" in names
     assert "segment_landcover" in names
+    assert "list_tools" in names
     assert "list_images" not in names
     assert "inspect_image" not in names
     assert "create_contact_sheet" not in names
     assert "stage_script_proposal" not in names
     assert "review_script_proposals" not in names
+    assert "author_skill" not in names
 
 
 def test_discovery_sorts_by_module_then_qualname() -> None:

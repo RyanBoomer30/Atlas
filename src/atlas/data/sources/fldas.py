@@ -16,6 +16,7 @@ from urllib.parse import quote
 import httpx
 from dotenv import load_dotenv
 
+from atlas.agent.layout import EARTHDATA_TOKEN, resolve_credential
 from atlas.data.base import (
     Asset,
     BBox,
@@ -26,6 +27,7 @@ from atlas.data.base import (
     Scene,
     SceneKind,
 )
+from atlas.data.credentials import EARTHDATA_CREDENTIALS, raise_for_missing_credential
 
 CMR_SEARCH_URL = "https://cmr.earthdata.nasa.gov/search/granules.umm_json"
 
@@ -237,7 +239,10 @@ class FldasClient(DataPullClient):
     reads one hyper-slab per granule for every requested variable and cell
     together, so the 0.1° global NetCDF is never downloaded. The OPeNDAP axes
     are read once per extract and every granule reuses them, so nothing depends
-    on hardcoded axis direction or endpoints.
+    on hardcoded axis direction or endpoints. An explicit token wins. Otherwise
+    the session value wins over the environment, which wins over
+    ``~/.atlas/keys``. A missing token still raises ``FldasAuthError`` with
+    ``MISSING_TOKEN_MESSAGE``.
     """
 
     short_name: ClassVar[str] = SHORT_NAME
@@ -261,7 +266,7 @@ class FldasClient(DataPullClient):
             timeout=timeout, follow_redirects=True, trust_env=True
         )
         self._owns_client = client is None
-        self._token = token or os.environ.get("EARTHDATA_TOKEN") or None
+        self._token = token or resolve_credential(EARTHDATA_TOKEN) or None
         self._username = username or os.environ.get("EARTHDATA_USERNAME") or None
         self._password = password or os.environ.get("EARTHDATA_PASSWORD") or None
         self.table_path = table_path
@@ -281,7 +286,13 @@ class FldasClient(DataPullClient):
         await self.aclose()
 
     async def search(self, request: PullRequest) -> PullResult:
-        """Search CMR for FLDAS granules (metadata only, no credentials)."""
+        """Search CMR for FLDAS granules (metadata only, no credentials).
+
+        A 401 or 403 while no token was resolved names ``EARTHDATA_TOKEN``
+        and says to set it with ``/key earthdata`` or the env var. A token
+        that is present names the rejection and the status. The value is
+        not included. The check runs after the response, not before the request.
+        """
         reject_wrapping_bbox(request.bbox)
         params: dict[str, Any] = {
             "short_name": self.short_name,
@@ -296,6 +307,11 @@ class FldasClient(DataPullClient):
             "page_size": request.limit,
         }
         resp = await self._client.get(CMR_SEARCH_URL, params=params)
+        raise_for_missing_credential(
+            resp,
+            EARTHDATA_CREDENTIALS,
+            satisfied=EARTHDATA_CREDENTIALS if self._token else (),
+        )
         resp.raise_for_status()
         payload = resp.json()
         if not isinstance(payload, dict):

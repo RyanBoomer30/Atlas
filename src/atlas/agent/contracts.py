@@ -40,20 +40,107 @@ class ToolCall(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
 
 
+class ModelImage(BaseModel):
+    """One local image artifact encoded for a vision model.
+
+    ``data`` is standard base64 of the file bytes. ``path`` is the
+    workspace-relative artifact path those bytes were read from.
+    """
+
+    path: str
+    media_type: str
+    data: str
+
+
 class ChatMessage(BaseModel):
-    """A portable chat-completions message."""
+    """A portable chat-completions message.
+
+    ``reasoning`` and ``reasoning_details`` are echoed on the next request when
+    the provider returned them. They are not part of ``content``. ``images``
+    are local artifact bytes sent alongside ``content`` as vision input.
+    """
 
     role: Role
     content: str | None = None
     tool_calls: list[ToolCall] = Field(default_factory=list)
     tool_call_id: str | None = None
+    reasoning: str | None = None
+    reasoning_details: list[dict[str, Any]] = Field(default_factory=list)
+    images: list[ModelImage] = Field(default_factory=list)
+
+
+class TokenUsage(BaseModel):
+    """Provider token counts and optional spend for one completion.
+
+    ``cached_tokens`` is the portion of the prompt served from cache.
+    ``reasoning_tokens`` is the portion of the completion spent on reasoning.
+    Both stay zero when the provider omits them. They are not added on top of
+    ``prompt_tokens`` or ``completion_tokens``.
+    """
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cached_tokens: int = 0
+    reasoning_tokens: int = 0
+    cost: float | None = None
+
+
+class CallTiming(BaseModel):
+    """HTTP status and measured duration for one model call.
+
+    ``time_to_first_token_seconds`` is set only when the transport reports it.
+    A non-streaming body leaves it empty.
+    """
+
+    http_status: int
+    elapsed_seconds: float
+    time_to_first_token_seconds: float | None = None
+    error_body: str | None = None
+
+
+class ModelCall(BaseModel):
+    """Usage and timing captured from one completion."""
+
+    usage: TokenUsage = Field(default_factory=TokenUsage)
+    timing: CallTiming | None = None
+
+
+class CatalogModel(BaseModel):
+    """One row from the OpenRouter models catalog.
+
+    ``name`` and ``description`` are display text with control characters,
+    ANSI sequences, and bidi overrides removed. An id that contains those
+    characters is not stored. ``supports_tools`` is true when the provider
+    lists ``tools`` in ``supported_parameters``.
+    """
+
+    id: str
+    name: str | None = None
+    description: str | None = None
+    context_length: int | None = None
+    prompt_price: str | None = None
+    completion_price: str | None = None
+    # OpenRouter ``pricing.input_cache_read``, dollars per cached token.
+    # Unset when the row has no cache-read rate. Estimates then price cached
+    # tokens at ``prompt_price``, because prompt tokens already include them.
+    cache_read_price: str | None = None
+    supports_tools: bool = False
 
 
 class ModelResponse(BaseModel):
-    """The subset of a model response needed by the runtime."""
+    """The subset of a model response needed by the runtime.
+
+    ``reasoning`` is display text for the turn. ``reasoning_details`` is the
+    provider payload to send back unchanged on the next request.
+    """
 
     content: str | None = None
     tool_calls: list[ToolCall] = Field(default_factory=list)
+    usage: TokenUsage = Field(default_factory=TokenUsage)
+    timing: CallTiming | None = None
+    reasoning: str | None = None
+    reasoning_details: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ToolCapableModel(Protocol):
@@ -112,6 +199,11 @@ class ToolRegistry:
     def register(self, tool: Tool) -> None:
         if tool.name in self._tools:
             raise ValueError(f"Tool already registered: {tool.name}")
+        self._tools[tool.name] = tool
+
+    # ATLAS-90. register() still refuses a duplicate. This only swaps one name.
+    def replace(self, tool: Tool) -> None:
+        """Register ``tool``, replacing any tool already stored under its name."""
         self._tools[tool.name] = tool
 
     @property
@@ -188,6 +280,12 @@ def build_registry(
 def default_registry() -> ToolRegistry:
     """Build the normal tool allow-list for one agent session."""
     registry = build_registry(("atlas.agent.tools",))
+
+    # Private module so discovery does not call cls(). This tool needs the live registry.
+    from atlas.agent.tools._list_tools import ListToolsTool
+
+    registry.register(ListToolsTool(lambda: registry.definitions))
+
     from atlas.models.registry import register_model_tools
 
     register_model_tools(registry)

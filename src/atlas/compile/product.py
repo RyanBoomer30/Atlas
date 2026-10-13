@@ -12,6 +12,16 @@ class SourceScenes(BaseModel):
     collection: str
     scenes: list[Scene] = Field(default_factory=list)
     error: str | None = None  # populated if this source's search failed
+    # Next STAC page for this source. None means the search has no further page,
+    # or the next page could not be recorded. See next_cursor_unavailable.
+    next_cursor: str | None = None
+    # Set when a next page exists but its cursor was not stored, for example
+    # "signed". None means the source is exhausted or the cursor is present.
+    next_cursor_unavailable: str | None = None
+    # Item-search URL. Empty when the client does not search a STAC API.
+    search_url: str = ""
+    # The resume cursor was rejected and must not be copied back from the manifest.
+    cursor_rejected: bool = False
 
 
 class SceneCatalog(BaseModel):
@@ -42,6 +52,21 @@ class MosaicResult(BaseModel):
     path: str  # where the PNG was written
 
 
+class MosaicSkip(BaseModel):
+    """Why one source contributed scenes but no rendered mosaic.
+
+    Attributes:
+        source: Registry name of the source that was not rendered.
+        collection: Collection the source searched.
+        reason: Why the render did not happen, either an unsupported backend
+            or the error that ended the attempt.
+    """
+
+    source: str
+    collection: str
+    reason: str
+
+
 class CompiledProduct(BaseModel):
     """Consolidated output for one AOI + time window across sources."""
 
@@ -52,3 +77,4 @@ class CompiledProduct(BaseModel):
     cloud_cover: dict[str, float | None] = Field(default_factory=dict)
     coverage: dict[str, float] = Field(default_factory=dict)  # AOI fraction, 0..1
     mosaics: list[MosaicResult] = Field(default_factory=list)
+    skipped_mosaics: list[MosaicSkip] = Field(default_factory=list)

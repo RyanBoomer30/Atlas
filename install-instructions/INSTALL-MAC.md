@@ -44,6 +44,7 @@ Edit `.env`:
 
 - `OPENROUTER_API_KEY` — required to run the agent. Create a key at https://openrouter.ai/keys
 - `FIRMS_MAP_KEY` — optional; required only for FIRMS fire sources. Free key from https://firms.modaps.eosdis.nasa.gov/api/map_key/
+- `EARTHDATA_TOKEN` and `FIRMS_MAP_KEY` can also be saved with `/key earthdata` and `/key firms` (`session`, `user`, or `delete`). A session value stays in memory. A user value is stored under `~/.atlas/keys` and is not written into this checkout. The session value wins, and the value is not printed.
 
 Put `atlas` on `PATH`, pointed at this checkout:
 
@@ -74,7 +75,7 @@ uv run pytest
 
 `atlas data` lists satellites and downloads scenes. `atlas sentinel2 optical ...` is shorthand for `atlas data sentinel2 optical ...`.
 
-The TUI reads `OPENROUTER_API_KEY` from the environment or from this repo's `.env`. The first `atlas` launch writes `<workspace>/.atlas/agent.toml` when that file is missing, with `model` set to `google/gemini-3.8-flash`. Edit that file to change the model. `ATLAS_MODEL` or `--model` overrides it for one launch.
+The TUI reads `OPENROUTER_API_KEY` from the environment or from this repo's `.env`. The first `atlas` launch writes `<workspace>/.atlas/agent.toml` when that file is missing, with `model` set to `deepseek/deepseek-v4.1-flash`. Edit that file to change the model. `ATLAS_MODEL` or `--model` overrides it for one launch.
 
 ## Troubleshooting
 
