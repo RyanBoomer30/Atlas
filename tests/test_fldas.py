@@ -480,6 +480,145 @@ async def test_an_auth_failure_stops_the_concurrent_reads() -> None:
     assert len(started) <= 3
 
 
+class FlakyFldas(FakeFldas):
+    """FakeFldas whose data reads fail in scripted ways before answering."""
+
+    def __init__(self, faults: dict[str, list[str]]) -> None:
+        super().__init__()
+        # granule file name -> faults to raise/return, in order, before a good reply
+        self.faults = faults
+        self.data_calls: list[str] = []
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        granule = next((name for name in self.faults if name in unquote(url)), None)
+        if granule is not None and not url.endswith(_axis_constraint()):
+            query = unquote(url.split("?", 1)[1])
+            if not query.startswith(("X", "Y")) and query != _axis_constraint():
+                self.data_calls.append(granule)
+                if self.faults[granule]:
+                    fault = self.faults[granule].pop(0)
+                    if fault == "dropped":
+                        raise httpx.RemoteProtocolError(
+                            "peer closed connection without sending complete message body "
+                            "(incomplete chunked read)",
+                            request=request,
+                        )
+                    if fault == "401":
+                        return httpx.Response(401, text="Unauthorized")
+                    if fault == "login":
+                        return httpx.Response(
+                            200,
+                            text="<!DOCTYPE html><html><body>Earthdata Login</body></html>",
+                            headers={"content-type": "text/html"},
+                        )
+        return super().handler(request)
+
+
+def _month_scene(month: int) -> Scene:
+    href = FL_DAS_OPENDAP.replace("A202001", f"A2020{month:02d}")
+    return Scene(
+        id=f"m{month}",
+        source="fldas",
+        collection="FLDAS_NOAH01_C_GL_M",
+        kind=SceneKind.landsurface,
+        datetime=datetime(2020, month, 1, tzinfo=UTC),
+        bbox=BBox(west=-180, south=-60, east=180, north=90),
+        platform="FLDAS",
+        assets={"opendap": Asset(href=href)},
+    )
+
+
+@pytest.fixture
+def no_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    real_sleep = asyncio.sleep
+
+    async def instant(_delay: float) -> None:
+        await real_sleep(0)
+
+    monkeypatch.setattr(fldas_module.asyncio, "sleep", instant)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_backoff")
+async def test_a_dropped_connection_is_retried_not_skipped() -> None:
+    fake = FlakyFldas({"A202002": ["dropped", "dropped"]})
+    client = fake.client(token="token")
+    try:
+        table = await client.extract_training_table(
+            _request(), [_month_scene(1), _month_scene(2)], variables=["Evap_tavg"]
+        )
+    finally:
+        await client.aclose()
+    assert not table.skipped
+    assert table.n_rows == 18
+    assert fake.data_calls.count("A202002") == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_backoff")
+async def test_a_connection_that_keeps_dropping_skips_only_that_month() -> None:
+    fake = FlakyFldas({"A202002": ["dropped"] * 5})
+    client = fake.client(token="token")
+    try:
+        table = await client.extract_training_table(
+            _request(), [_month_scene(1), _month_scene(2)], variables=["Evap_tavg"]
+        )
+    finally:
+        await client.aclose()
+    assert table.n_rows == 9
+    assert len(table.skipped) == 1 and "dropped the connection" in table.skipped[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_backoff")
+@pytest.mark.parametrize("fault", ["401", "login"])
+async def test_a_stray_auth_reply_after_the_token_worked_is_retried(fault: str) -> None:
+    fake = FlakyFldas({"A202003": [fault, fault]})
+    client = fake.client(token="token")
+    try:
+        table = await client.extract_training_table(
+            _request(),
+            [_month_scene(1), _month_scene(2), _month_scene(3)],
+            variables=["Evap_tavg"],
+            concurrency=1,
+        )
+    finally:
+        await client.aclose()
+    assert not table.skipped
+    assert table.n_rows == 27
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_backoff")
+async def test_an_auth_failure_that_persists_still_stops_the_extract() -> None:
+    fake = FlakyFldas({"A202002": ["401"] * 10})
+    client = fake.client(token="token")
+    try:
+        with pytest.raises(FldasAuthError):
+            await client.extract_training_table(
+                _request(),
+                [_month_scene(1), _month_scene(2)],
+                variables=["Evap_tavg"],
+                concurrency=1,
+            )
+    finally:
+        await client.aclose()
+    assert fake.data_calls.count("A202002") == 4
+
+
+@pytest.mark.asyncio
+async def test_a_token_that_never_worked_fails_without_retrying() -> None:
+    fake = FakeFldas(status=401)
+    client = fake.client(token="bad")
+    try:
+        with pytest.raises(FldasAuthError):
+            await client.extract_training_table(_request(), [_scene()], variables=["Evap_tavg"])
+    finally:
+        await client.aclose()
+    assert len(fake.queries) == 1
+
+
 @pytest.mark.asyncio
 async def test_points_produce_one_data_request_and_cell_columns(tmp_path: Path) -> None:
     points_file = tmp_path / "points.csv"
