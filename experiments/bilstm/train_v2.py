@@ -6,9 +6,11 @@ metrics overall and per state against the train-mean and persistence baselines,
 runs the 2x2 deg spatial block holdout, re-runs the nn.LSTM equivalence check on the
 trained weights, and writes figures to ./figures_v2 and metrics to ./metrics_v2.
 
-    python train_v2.py
+    python train_v2.py                  # shared split v2 (writes *_v2)
+    python train_v2.py --spei-history   # + SPEI-12 at t-11..t as input (writes *_v2_spei)
 """
 
+import argparse
 import copy
 import json
 import time
@@ -21,7 +23,15 @@ import numpy as np
 import pandas as pd
 import torch
 from bilstm import BiLSTM
-from data_v2 import CELLS_CSV, FEATURES, MASKS_JSON, STATE_NAMES, load_samples, load_splits
+from data_v2 import (
+    CELLS_CSV,
+    FEATURES,
+    MASKS_JSON,
+    SPEI_HISTORY_FEATURE,
+    STATE_NAMES,
+    load_samples,
+    load_splits,
+)
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger
 from shared_split_v2 import BLOCK_HOLDOUT_FRACTION, SEED, SPLIT_VERSION, block_of
@@ -30,8 +40,11 @@ from train import GRID, INK, INK_2, SURFACE, style
 
 HIDDEN, EPOCHS, BATCH, LR = 64, 30, 256, 1e-3
 OUT = Path(__file__).parent
-FIG = OUT / "figures_v2"
-METRICS = OUT / "metrics_v2"
+# Run variant. Default "v2" is the shared split v2 run; --spei-history adds SPEI-12 at
+# t-11..t as an input channel and writes to its own *_v2_spei outputs.
+TAG, TITLE, INPUTS = "v2", SPLIT_VERSION, FEATURES
+FIG = OUT / f"figures_{TAG}"
+METRICS = OUT / f"metrics_{TAG}"
 STATE_COLORS = {"kansas": "#2a78d6", "texas": "#eb6834", "california": "#1baf7a"}
 LABELS = {"kansas": "Kansas", "texas": "Texas", "california": "California"}
 # Baselines are neutral so the state hue stays with the model.
@@ -62,7 +75,7 @@ def fit(samples, name, exclude=None):
         "val": DataLoader(splits["val"], batch_size=4096),
     }
     print(f"[{name}] samples:", {k: len(v) for k, v in splits.items()})
-    model = BiLSTM(input_size=len(FEATURES), hidden_size=HIDDEN, lr=LR)
+    model = BiLSTM(input_size=len(INPUTS), hidden_size=HIDDEN, lr=LR)
     logger = CSVLogger(OUT / "logs", name=name)
     best = ModelCheckpoint(monitor="val_loss", mode="min", save_top_k=1, filename="best")
     trainer = L.Trainer(
@@ -163,9 +176,7 @@ def figure_loss(log_dir, best_epoch):
         color=INK,
     )
     ax.legend(["train (state-balanced)", "val"], frameon=False, labelcolor=INK)
-    style(
-        ax, f"Scratch BiLSTM ({SPLIT_VERSION}): MSE loss per epoch", "Epoch", "MSE (SPEI-12 units²)"
-    )
+    style(ax, f"Scratch BiLSTM ({TITLE}): MSE loss per epoch", "Epoch", "MSE (SPEI-12 units²)")
     ax.set_ylim(bottom=0)
     fig.tight_layout()
     fig.savefig(FIG / "loss_curves.png", dpi=160)
@@ -212,7 +223,7 @@ def figure_pred_vs_actual(samples, test, pred, table):
         style(ax, "", "Actual next-month SPEI-12", "Predicted SPEI-12" if i == 0 else "")
         ax.legend(loc="lower right", frameon=False, labelcolor=INK, markerscale=3)
     fig.suptitle(
-        f"Test set ({SPLIT_VERSION}, 2021-2024): predicted vs actual",
+        f"Test set ({TITLE}, 2021-2024): predicted vs actual",
         x=0.01,
         ha="left",
         color=INK,
@@ -357,10 +368,21 @@ def figure_equivalence(results):
     plt.close(fig)
 
 
-def main():
+def main(argv=None):
+    global TAG, TITLE, INPUTS, FIG, METRICS
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--spei-history", action="store_true", help="add SPEI-12 at t-11..t as an input"
+    )
+    args = parser.parse_args(argv)
+    if args.spei_history:
+        TAG, TITLE = "v2_spei", f"{SPLIT_VERSION} + SPEI history"
+        INPUTS = [*FEATURES, SPEI_HISTORY_FEATURE]
+        FIG, METRICS = OUT / f"figures_{TAG}", OUT / f"metrics_{TAG}"
     FIG.mkdir(exist_ok=True)
     METRICS.mkdir(exist_ok=True)
-    samples = load_samples()
+    samples = load_samples(spei_history=args.spei_history)
+    assert samples["x"].shape[2] == len(INPUTS)
     split = samples["split"]
     counts = (
         pd.DataFrame({"state": np.array(STATE_NAMES)[samples["state"]], "split": split})
@@ -372,8 +394,8 @@ def main():
     counts.to_csv(METRICS / "counts.csv")
     print(counts)
 
-    model, log_dir, best_epoch, seconds = fit(samples, "scratch_bilstm_v2")
-    torch.save(model.state_dict(), OUT / "scratch_bilstm_v2.pt")
+    model, log_dir, best_epoch, seconds = fit(samples, f"scratch_bilstm_{TAG}")
+    torch.save(model.state_dict(), OUT / f"scratch_bilstm_{TAG}.pt")
     train_mean = float(samples["y"][split == "train"].mean())
     test = split == "test"
     table, pred = evaluate(model, samples, test, train_mean)
@@ -382,7 +404,7 @@ def main():
 
     held, n_blocks, n_held = spatial_holdout(samples)
     spatial_model, _, spatial_epoch, spatial_seconds = fit(
-        samples, "scratch_bilstm_v2_spatial", exclude=held
+        samples, f"scratch_bilstm_{TAG}_spatial", exclude=held
     )
     spatial_train_mean = float(samples["y"][(split == "train") & ~held].mean())
     spatial, _ = evaluate(spatial_model, samples, test & held, spatial_train_mean)
@@ -401,7 +423,8 @@ def main():
     )
     summary = {
         "split_version": SPLIT_VERSION,
-        "features": FEATURES,
+        "variant": TAG,
+        "features": INPUTS,
         "hidden_size": HIDDEN,
         "batch_size": BATCH,
         "lr": LR,

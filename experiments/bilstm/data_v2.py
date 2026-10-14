@@ -59,6 +59,7 @@ FLDAS_FEATURES = [
     "Tair_f_tavg",
 ]
 FEATURES = [*FLDAS_FEATURES, "month_sin", "month_cos"]
+SPEI_HISTORY_FEATURE = "spei12_history"  # optional channel, see load_samples
 TARGET = "spei12"
 STATE_NAMES = list(STATES)
 MONTHS = pd.period_range(FIRST_MONTH, LAST_MONTH, freq="M")
@@ -266,6 +267,10 @@ def windows(features, spei, centers, state_index):
         "x": x.reshape(-1, SEQ_LEN, features.shape[2]),
         "y": spei[:, ends + 1].reshape(-1).astype(np.float32),
         "persistence": spei[:, ends].reshape(-1).astype(np.float32),
+        # SPEI-12 over the input months t-11..t (only climate up to t; no target leak).
+        "spei_hist": np.lib.stride_tricks.sliding_window_view(spei, SEQ_LEN, axis=1)[:, : len(ends)]
+        .reshape(-1, SEQ_LEN)
+        .astype(np.float32),
         "state": np.full(n_cells * len(ends), state_index, np.int8),
         "lon": np.repeat(centers[:, 0], len(ends)).astype(np.float32),
         "lat": np.repeat(centers[:, 1], len(ends)).astype(np.float32),
@@ -289,12 +294,22 @@ def build():
     return data
 
 
-def load_samples():
-    """All v2 samples as numpy arrays (built and cached on first use)."""
-    if not CACHE.exists():
-        build()
-    with np.load(CACHE) as data:
-        return {key: data[key] for key in data.files}
+def load_samples(spei_history=False):
+    """All v2 samples as numpy arrays (built and cached on first use).
+
+    ``spei_history`` appends SPEI-12 at t-11..t (unscaled; SPEI is already standardized)
+    as one more input channel, after the FEATURES channels.
+    """
+    if CACHE.exists():
+        with np.load(CACHE) as data:
+            samples = {key: data[key] for key in data.files}
+    if not CACHE.exists() or "spei_hist" not in samples:
+        samples = build()
+    if spei_history:
+        samples = samples | {
+            "x": np.concatenate([samples["x"], samples["spei_hist"][:, :, None]], axis=2)
+        }
+    return samples
 
 
 def load_splits(samples=None, exclude=None):
