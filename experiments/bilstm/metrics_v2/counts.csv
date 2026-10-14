@@ -1,0 +1,4 @@
+state,train,val,test,cells
+kansas,33792,4224,4224,88
+texas,80256,10032,10032,209
+california,23808,2976,2976,62
