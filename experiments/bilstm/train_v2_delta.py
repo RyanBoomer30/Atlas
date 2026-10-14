@@ -227,7 +227,16 @@ def figure_skill(table, previous):
             linewidth=2,
         )
         ax.plot([x] * len(rel), rel, "o", color=INK, markersize=3.5, zorder=3)
-        label(x, rel.mean() if rel.mean() >= 0 else rel.min(), INK)
+        # The label is the seed mean, placed clear of the lowest seed's dot.
+        ax.text(
+            x,
+            min(rel.min(), rel.mean()) - 0.012,
+            f"{rel.mean():+.1%}",
+            ha="center",
+            va="top",
+            color=INK,
+            fontsize=8,
+        )
     handles = [
         plt.Rectangle((0, 0), 1, 1, color="#b5b3ad"),
         plt.Rectangle((0, 0), 1, 1, color=INK),
@@ -281,16 +290,17 @@ def figure_loss(runs):
             linewidth=2,
             zorder=3,
         )
-        ax.annotate(
-            f"seed {seed}: best epoch {run['best_epoch']}",
-            (val.epoch.iloc[-1] + 1, val.val_loss.iloc[-1]),
-            xytext=(6, 0),
-            textcoords="offset points",
-            color=INK,
-            va="center",
-            fontsize=8,
-        )
     ax.plot([], [], color=INK_2, linestyle="--", linewidth=1, label="train (dashed)")
+    best = sorted({run["best_epoch"] for run in runs.values()})
+    ax.text(
+        0.97,
+        0.6,
+        f"best val epoch: {', '.join(map(str, best))} (dots)",
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        color=INK,
+    )
     ax.legend(frameon=False, labelcolor=INK, fontsize=8)
     style(
         ax,

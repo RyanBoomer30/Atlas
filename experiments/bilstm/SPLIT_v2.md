@@ -159,6 +159,12 @@ t-11..t (unscaled) as a 15th input channel (`load_samples(spei_history=True)`). 
 t aggregates climate up to t only, so the t+1 target does not leak. It writes
 `metrics_v2_spei/`, `figures_v2_spei/` and `scratch_bilstm_v2_spei.pt`.
 
+`python train_v2_delta.py` keeps the SPEI-history inputs and trains on the change
+ΔSPEI-12 = SPEI-12(t+1) − SPEI-12(t) (forecast = SPEI-12(t) + output), with AdamW weight
+decay picked on val, early stopping, state shares proportional to each state's effective
+number of independent cells, and seeds 42–44. It writes `metrics_v2_delta/`,
+`figures_v2_delta/` and `scratch_bilstm_v2_delta_seed*.pt`.
+
 ## Known limits
 
 - SPEIbase fits its distribution over 1901–2024, so the standardization has seen the
