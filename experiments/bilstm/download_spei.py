@@ -4,7 +4,8 @@ Writes a long CSV shaped like fldas.csv (longitude, latitude, time, speiNN) so t
 two tables can be joined as features + target.
 
     python download_spei.py                                   # SPEI-12, FLDAS bbox
-    python download_spei.py --scale 3 --coords -100,35,-95,40 --start 1982-01
+    python download_spei.py --scale 3 --coords=-100,35,-95,40 --start 1982-01
+    python download_spei.py --coords=-102.05,36.99,-94.59,40.00 --csv kansas_spei12.csv
 """
 
 import argparse
@@ -39,7 +40,7 @@ def download(scale: int, out_dir: Path) -> Path:
     return path
 
 
-def subset(path: Path, scale: int, west, south, east, north, start, end) -> Path:
+def subset(path: Path, scale: int, west, south, east, north, start, end, csv_name=None) -> Path:
     ds = xr.open_dataset(path, engine="h5netcdf")
     # Keep every 0.5 deg cell whose footprint overlaps the bbox, so a bbox smaller
     # than one cell still gets the cell it sits in.
@@ -58,7 +59,7 @@ def subset(path: Path, scale: int, west, south, east, north, start, end) -> Path
         .dropna(subset=[column])  # ocean / no-data cells
     )
     df["time"] = df["time"].dt.strftime("%Y-%m-01")
-    out = path.with_name(f"{column}.csv")
+    out = path.with_name(csv_name or f"{column}.csv")
     df[["longitude", "latitude", "time", column]].to_csv(out, index=False)
     n_cells = df.groupby(["longitude", "latitude"]).ngroups
     print(f"wrote {out}: {len(df)} rows, {n_cells} cells, {df['time'].min()} to {df['time'].max()}")
@@ -72,11 +73,12 @@ def main():
     parser.add_argument("--start", default="1982-01", help="first month, YYYY-MM")
     parser.add_argument("--end", default=None, help="last month, YYYY-MM (default: latest)")
     parser.add_argument("--out", type=Path, default=OUT_DIR)
+    parser.add_argument("--csv", default=None, help="CSV name in --out (default: speiNN.csv)")
     args = parser.parse_args()
 
     west, south, east, north = (float(v) for v in args.coords.split(","))
     path = download(args.scale, args.out)
-    subset(path, args.scale, west, south, east, north, args.start, args.end)
+    subset(path, args.scale, west, south, east, north, args.start, args.end, args.csv)
 
 
 if __name__ == "__main__":
