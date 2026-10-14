@@ -152,13 +152,20 @@ test are unweighted; results are reported per state.
   next to it.
 - `check_equivalence.run` on the trained weights, float32 and float64; must PASS.
 
+## Variant: SPEI history input
+
+`python train_v2.py --spei-history` keeps everything above and appends SPEI-12 at
+t-11..t (unscaled) as a 15th input channel (`load_samples(spei_history=True)`). SPEI-12 at
+t aggregates climate up to t only, so the t+1 target does not leak. It writes
+`metrics_v2_spei/`, `figures_v2_spei/` and `scratch_bilstm_v2_spei.pt`.
+
 ## Known limits
 
 - SPEIbase fits its distribution over 1901–2024, so the standardization has seen the
   test years (as in v1).
-- The model sees FLDAS anomalies only, not past SPEI. SPEI-12 at t+1 shares 11 of its 12
-  aggregated months with SPEI-12 at t, so persistence is a very strong baseline that this
-  input set cannot use directly.
+- The default inputs are FLDAS anomalies only, not past SPEI. SPEI-12 at t+1 shares 11
+  of its 12 aggregated months with SPEI-12 at t, so persistence is a very strong baseline
+  that this input set cannot use directly; the SPEI-history variant adds it.
 - Neighbouring cells are strongly correlated, so the effective sample size is far below
   the sample count, and the temporal test still contains every training cell. The
   spatial check covers unseen places only for ~20% of blocks and one seed.

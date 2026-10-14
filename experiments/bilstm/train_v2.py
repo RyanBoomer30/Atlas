@@ -260,7 +260,9 @@ def figure_metric_bars(table, name="metrics_by_state.png", title="Test"):
                     edgecolor=SURFACE,
                     linewidth=2,
                 )
-                text = "n/a" if np.isnan(value) else f"{value:.2f}"
+                text = (
+                    "n/a" if np.isnan(value) else f"{value:.3f}" if value < 0.2 else f"{value:.2f}"
+                )
                 ax.text(
                     x,
                     (0 if np.isnan(value) else max(value, 0)),

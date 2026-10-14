@@ -1,0 +1,164 @@
+{
+  "split_version": "v2",
+  "variant": "v2_spei",
+  "features": [
+    "SoilMoi00_10cm_tavg",
+    "SoilMoi10_40cm_tavg",
+    "SoilMoi40_100cm_tavg",
+    "SoilMoi100_200cm_tavg",
+    "Evap_tavg",
+    "Qs_tavg",
+    "Qsb_tavg",
+    "SWE_inst",
+    "SnowDepth_inst",
+    "RadT_tavg",
+    "Rainf_f_tavg",
+    "Tair_f_tavg",
+    "month_sin",
+    "month_cos",
+    "spei12_history"
+  ],
+  "hidden_size": 64,
+  "batch_size": 256,
+  "lr": 0.001,
+  "max_epochs": 30,
+  "best_epoch": 2,
+  "train_seconds": 669.4,
+  "train_mean": 0.15460188686847687,
+  "spatial": {
+    "blocks": 41,
+    "held_out_blocks": 8,
+    "held_out_cells": 78,
+    "best_epoch": 1,
+    "train_seconds": 529.5
+  },
+  "equivalence": {
+    "pass": true,
+    "float32": {
+      "short_one_bias": 2.9802322387695312e-08,
+      "short_split_bias": 2.9802322387695312e-08,
+      "typical_one_bias": 1.341104507446289e-07,
+      "typical_split_bias": 1.4901161193847656e-07,
+      "long_one_bias": 5.960464477539063e-08,
+      "long_split_bias": 1.1920928955078125e-07
+    },
+    "float64": {
+      "short_one_bias": 0.0,
+      "short_split_bias": 1.1102230246251565e-16,
+      "typical_one_bias": 2.220446049250313e-16,
+      "typical_split_bias": 4.440892098500626e-16,
+      "long_one_bias": 4.440892098500626e-16,
+      "long_split_bias": 4.440892098500626e-16
+    }
+  },
+  "masks": {
+    "kansas": [
+      {
+        "rule": "SPEI cells with any valid 0.1 deg FLDAS land cell",
+        "kept": 96
+      },
+      {
+        "rule": "SPEI-12 present for the cell (non-ocean in SPEIbase)",
+        "removed": 0,
+        "kept": 96
+      },
+      {
+        "rule": "cell center inside the state border (Census cb_2023 20m)",
+        "removed": 8,
+        "kept": 88
+      },
+      {
+        "rule": "FLDAS input present in every month 1982-01..2024-12",
+        "removed": 0,
+        "kept": 88
+      },
+      {
+        "rule": "hyper-arid: <= 25% of 1982-2014 months below 1.0 mm rain",
+        "removed": 0,
+        "kept": 88
+      },
+      {
+        "rule": "stable SPEI-12: no NaN/inf, |SPEI| <= 4.0, no run of >= 6 identical months",
+        "removed": 0,
+        "kept": 88
+      },
+      {
+        "rule": "MCD12Q1 2010 grassland/cropland/mosaic >= 30% of land",
+        "removed": 0,
+        "kept": 88
+      }
+    ],
+    "texas": [
+      {
+        "rule": "SPEI cells with any valid 0.1 deg FLDAS land cell",
+        "kept": 549
+      },
+      {
+        "rule": "SPEI-12 present for the cell (non-ocean in SPEIbase)",
+        "removed": 0,
+        "kept": 549
+      },
+      {
+        "rule": "cell center inside the state border (Census cb_2023 20m)",
+        "removed": 285,
+        "kept": 264
+      },
+      {
+        "rule": "FLDAS input present in every month 1982-01..2024-12",
+        "removed": 0,
+        "kept": 264
+      },
+      {
+        "rule": "hyper-arid: <= 25% of 1982-2014 months below 1.0 mm rain",
+        "removed": 0,
+        "kept": 264
+      },
+      {
+        "rule": "stable SPEI-12: no NaN/inf, |SPEI| <= 4.0, no run of >= 6 identical months",
+        "removed": 0,
+        "kept": 264
+      },
+      {
+        "rule": "MCD12Q1 2010 grassland/cropland/mosaic >= 30% of land",
+        "removed": 55,
+        "kept": 209
+      }
+    ],
+    "california": [
+      {
+        "rule": "SPEI cells with any valid 0.1 deg FLDAS land cell",
+        "kept": 312
+      },
+      {
+        "rule": "SPEI-12 present for the cell (non-ocean in SPEIbase)",
+        "removed": 0,
+        "kept": 312
+      },
+      {
+        "rule": "cell center inside the state border (Census cb_2023 20m)",
+        "removed": 139,
+        "kept": 173
+      },
+      {
+        "rule": "FLDAS input present in every month 1982-01..2024-12",
+        "removed": 0,
+        "kept": 173
+      },
+      {
+        "rule": "hyper-arid: <= 25% of 1982-2014 months below 1.0 mm rain",
+        "removed": 27,
+        "kept": 146
+      },
+      {
+        "rule": "stable SPEI-12: no NaN/inf, |SPEI| <= 4.0, no run of >= 6 identical months",
+        "removed": 0,
+        "kept": 146
+      },
+      {
+        "rule": "MCD12Q1 2010 grassland/cropland/mosaic >= 30% of land",
+        "removed": 84,
+        "kept": 62
+      }
+    ]
+  }
+}
