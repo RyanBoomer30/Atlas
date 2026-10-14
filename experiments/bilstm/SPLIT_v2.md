@@ -118,8 +118,11 @@ months; land-cover change over 1982–2024 is ignored.
 Each of the 12 FLDAS features is z-scored **per cell and per calendar month** with the
 mean and std of that cell's months in 1982–2014 (the train years; the last train input
 month is 2014-11). Inputs are therefore anomalies from the cell's own seasonal cycle.
-A feature that never varies for a cell and calendar month (e.g. snow in south Texas) is
-set to 0. Month of year is added as sin and cos of 2π(month−1)/12. The SPEI-12 target
+Some cell/month pairs barely vary in the train years (baseflow `Qsb_tavg` in dry cells,
+snow in the south), so a plain z-score turns a later change into |z| up to ~40,000; that
+saturated the LSTM on a first run (constant predictions for whole cells in val/test).
+Each per-cell std is therefore floored at 0.1 × the feature's pooled 1982–2014 std over
+the state's kept cells, and z is clipped to ±10 (0.016% of input values reach the clip). Month of year is added as sin and cos of 2π(month−1)/12. The SPEI-12 target
 is left unscaled.
 
 ## Balancing

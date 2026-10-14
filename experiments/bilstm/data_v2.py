@@ -62,6 +62,8 @@ FEATURES = [*FLDAS_FEATURES, "month_sin", "month_cos"]
 TARGET = "spei12"
 STATE_NAMES = list(STATES)
 MONTHS = pd.period_range(FIRST_MONTH, LAST_MONTH, freq="M")
+STD_FLOOR = 0.1  # per-cell std floor, as a share of the pooled std (see normalize)
+Z_CLIP = 10.0
 STUCK_RUN = 6  # this many identical consecutive SPEI-12 values marks an unstable fit
 
 
@@ -229,17 +231,22 @@ def build_state(state):
 
 
 def normalize(x):
-    """Z-score per cell, calendar month and feature using STATS_YEARS; add month sin/cos."""
+    """Z-score per cell, calendar month and feature using STATS_YEARS; add month sin/cos.
+
+    A cell and month whose feature barely moves in the train years (baseflow in a dry
+    cell, snow in the south) would turn any later change into a huge z. Each std is
+    floored at STD_FLOOR x the feature's pooled train-year std over the state's kept
+    cells, and z is clipped to +/-Z_CLIP.
+    """
     years, month = MONTHS.year.to_numpy(), MONTHS.month.to_numpy()
     stats = (years >= STATS_YEARS[0]) & (years <= STATS_YEARS[1])
+    floor = STD_FLOOR * x[:, stats].reshape(-1, x.shape[2]).std(axis=0)
     z = np.zeros_like(x)
     for m in range(1, 13):
         cols = month == m
         ref = x[:, cols & stats]
         mean, std = ref.mean(axis=1, keepdims=True), ref.std(axis=1, keepdims=True)
-        # A feature that never varies for this cell and month (e.g. no snow) carries no anomaly.
-        flat = std < 1e-6 * (np.abs(mean) + 1e-12)
-        z[:, cols] = np.where(flat, 0.0, (x[:, cols] - mean) / np.where(flat, 1.0, std))
+        z[:, cols] = np.clip((x[:, cols] - mean) / np.maximum(std, floor), -Z_CLIP, Z_CLIP)
     angle = 2 * np.pi * (month - 1) / 12
     season = np.broadcast_to(
         np.stack([np.sin(angle), np.cos(angle)], axis=1), (len(x), len(MONTHS), 2)

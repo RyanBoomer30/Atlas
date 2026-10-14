@@ -219,7 +219,7 @@ def figure_pred_vs_actual(samples, test, pred, table):
         fontsize=12,
     )
     fig.tight_layout()
-    fig.savefig(FIG / "pred_vs_actual.png", dpi=160)
+    fig.savefig(FIG / "pred_vs_actual.png", dpi=110)  # dense scatter; keeps the PNG < 500 KB
     plt.close(fig)
 
 
@@ -306,9 +306,9 @@ def figure_map(held_blocks):
             color=STATE_COLORS[state],
             label=f"{LABELS[state]} ({len(kept)})",
         )
-        ax.text(
-            kept.longitude.mean(), kept.latitude.max() + 0.6, LABELS[state], color=INK, ha="center"
-        )
+        # Texas sits just south of Kansas, so its label goes under its cells.
+        y = kept.latitude.min() - 1.0 if state == "texas" else kept.latitude.max() + 0.6
+        ax.text(kept.longitude.mean(), y, LABELS[state], color=INK, ha="center")
     for bx, by in held_blocks:
         ax.add_patch(
             plt.Rectangle(
