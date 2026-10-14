@@ -405,22 +405,29 @@ class FldasClient(DataPullClient):
         ordered = sorted(scenes, key=lambda scene: (scene.datetime, scene.id))
         limit = asyncio.Semaphore(max(1, concurrency))
 
-        async def read(scene: Scene) -> dict[str, _Array]:
-            async with limit:
-                return await self._read_granule(scene, names, x_lo, x_hi, y_lo, y_hi)
-
         finished = 0
 
-        def report(task: asyncio.Future[dict[str, _Array]]) -> None:
+        def tick() -> None:
             nonlocal finished
-            if task.cancelled() or on_progress is None:
-                return
             finished += 1
-            on_progress(finished, len(ordered))
+            if on_progress is not None:
+                on_progress(finished, len(ordered))
+
+        async def read(scene: Scene) -> dict[str, _Array]:
+            # Progress is counted here, inside the task, so it is reported before the
+            # task completes; a done-callback can run after the extract has returned.
+            async with limit:
+                try:
+                    arrays = await self._read_granule(scene, names, x_lo, x_hi, y_lo, y_hi)
+                except asyncio.CancelledError:
+                    raise
+                except BaseException:
+                    tick()
+                    raise
+                tick()
+                return arrays
 
         tasks = [asyncio.ensure_future(read(scene)) for scene in ordered]
-        for task in tasks:
-            task.add_done_callback(report)
         # Months finish in any order; rows are kept and written in month order.
         # The table on disk grows by appending each finished month, so it is
         # never rewritten whole while the extract runs.
