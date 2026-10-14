@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, ClassVar, Self
 
@@ -16,7 +17,11 @@ from atlas.data.base import (
     Scene,
     SceneKind,
 )
-from atlas.data.credentials import EARTHDATA_CREDENTIALS, raise_for_missing_credential
+from atlas.data.credentials import (
+    EARTHDATA_CREDENTIALS,
+    earthdata_download_headers,
+    raise_for_missing_credential,
+)
 
 CMR_SEARCH_URL = "https://cmr.earthdata.nasa.gov/search/granules.umm_json"
 
@@ -29,6 +34,7 @@ class MODISClient(DataPullClient):
     satellite: ClassVar[str] = "modis"
     scene_kind: ClassVar[SceneKind] = SceneKind.optical
     nominal_gsd_m: ClassVar[float | None] = None
+    download_credentials: ClassVar[tuple[str, ...]] = EARTHDATA_CREDENTIALS
 
     def __init__(
         self,
@@ -47,6 +53,10 @@ class MODISClient(DataPullClient):
     @property
     def collection(self) -> str:
         return self.short_name
+
+    def download_headers(self, href: str) -> Mapping[str, str]:
+        """The Earthdata bearer token for LP DAAC / LAADS files, which redirect to login without it."""
+        return earthdata_download_headers(href, self._token)
 
     async def aclose(self) -> None:
         if self._owns_client:

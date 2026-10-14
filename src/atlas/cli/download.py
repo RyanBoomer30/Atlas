@@ -20,6 +20,12 @@ from atlas.data.cog import (
     model_bounds,
     open_cog,
 )
+from atlas.data.credentials import (
+    CredentialRejectedError,
+    MissingCredentialError,
+    is_earthdata_host,
+    raise_for_missing_credential,
+)
 
 _SAFE_ID = re.compile(r"[^A-Za-z0-9._-]+")
 _BROWSE_KEYS = frozenset({"rendered_preview", "thumbnail", "preview"})
@@ -257,7 +263,12 @@ async def download_assets(
                     _retire_previous(out, stale, path)
                     stale = None
                 else:
-                    async with http.stream("GET", href, follow_redirects=True) as response:
+                    client = clients.get(scene.source)
+                    headers = _download_headers(client, href)
+                    async with http.stream(
+                        "GET", href, headers=headers, follow_redirects=True
+                    ) as response:
+                        _raise_for_download_credential(client, href, response, headers)
                         response.raise_for_status()
                         suffix = asset_suffix(asset, response.headers.get("content-type"))
                         path = dest_dir / scene_filename(scene.id, key, suffix)
@@ -287,7 +298,7 @@ async def download_assets(
                 )
             )
             return
-        except BrowseAssetError as exc:
+        except (BrowseAssetError, MissingCredentialError, CredentialRejectedError) as exc:
             await record(
                 DownloadOutcome(
                     source=scene.source, scene_id=scene.id, status="failed", error=str(exc)
@@ -461,6 +472,30 @@ async def _windowed_cog(
     except (CogError, httpx.HTTPError):
         return None
     return encode_cog(read), read.bytes_fetched, read.granule_size
+
+
+def _download_headers(client: DataPullClient | None, href: str) -> dict[str, str]:
+    """Headers the source wants on this asset GET (an Earthdata token, or none)."""
+    if client is None:
+        return {}
+    return dict(client.download_headers(href))
+
+
+def _raise_for_download_credential(
+    client: DataPullClient | None,
+    href: str,
+    response: httpx.Response,
+    headers: Mapping[str, str],
+) -> None:
+    """Name the Earthdata credential on a 401/403 instead of the login redirect URL.
+
+    Without a token, LP DAAC and other DAACs redirect to Earthdata Login, which
+    answers 401. That becomes :class:`MissingCredentialError`; a token that
+    was sent and refused becomes :class:`CredentialRejectedError`.
+    """
+    names = getattr(client, "download_credentials", ()) if is_earthdata_host(href) else ()
+    sent = "Authorization" in headers
+    raise_for_missing_credential(response, names, satisfied=names if sent else ())
 
 
 async def _signed_href(client: DataPullClient | None, href: str) -> str:

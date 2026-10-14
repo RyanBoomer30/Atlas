@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Collection
+from urllib.parse import urlparse
 
 from atlas.agent.layout import (
     EARTHDATA_TOKEN,
@@ -20,6 +21,11 @@ EARTHDATA_CREDENTIALS: tuple[str, ...] = (EARTHDATA_TOKEN,)
 FIRMS_CREDENTIALS: tuple[str, ...] = (FIRMS_MAP_KEY,)
 
 _AUTH_STATUSES = frozenset({401, 403})
+# Hosts that take the Earthdata Login bearer token: the DAAC archives (LP DAAC,
+# GES DISC, NSIDC, ...) and URS. A redirect off these hosts, such as LP DAAC's
+# 303 to a presigned S3 URL, drops the header (httpx strips Authorization when
+# the origin changes).
+_EARTHDATA_HOST_SUFFIXES = (".earthdata.nasa.gov", ".earthdatacloud.nasa.gov")
 # A value must never be interpolated into the error, so only env-var names pass.
 _VARIABLE_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
@@ -50,6 +56,25 @@ class CredentialRejectedError(RuntimeError):
         self.names = cleaned
         self.status_code = status
         super().__init__(_rejected_message(status, cleaned))
+
+
+def is_earthdata_host(href: str) -> bool:
+    """True when ``href`` is an https URL on an Earthdata Login host."""
+    parsed = urlparse(href)
+    host = (parsed.hostname or "").lower()
+    return parsed.scheme == "https" and host.endswith(_EARTHDATA_HOST_SUFFIXES)
+
+
+def earthdata_download_headers(href: str, token: str | None) -> dict[str, str]:
+    """Bearer header for an Earthdata-hosted file, or no headers.
+
+    The token is sent only to Earthdata hosts over https, so a catalog that
+    links a file elsewhere never receives it.
+    """
+    token = (token or "").strip()
+    if not token or not is_earthdata_host(href):
+        return {}
+    return {"Authorization": f"Bearer {token}"}
 
 
 def credential_is_set(name: str) -> bool:
