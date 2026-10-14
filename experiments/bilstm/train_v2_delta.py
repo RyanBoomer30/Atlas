@@ -104,7 +104,7 @@ def datasets(samples, exclude=None):
     return out, masks
 
 
-def fit(samples, shares, name, seed, weight_decay, exclude=None):
+def fit(samples, shares, name, seed, weight_decay, exclude=None, hidden=HIDDEN):
     L.seed_everything(seed, workers=True)
     data, masks = datasets(samples, exclude)
     loaders = {
@@ -115,7 +115,7 @@ def fit(samples, shares, name, seed, weight_decay, exclude=None):
         ),
         "val": DataLoader(data["val"], batch_size=4096),
     }
-    model = RegularizedBiLSTM(len(INPUTS), HIDDEN, LR, weight_decay)
+    model = RegularizedBiLSTM(len(INPUTS), hidden, LR, weight_decay)
     logger = CSVLogger(OUT / "logs", name=name)
     best = ModelCheckpoint(monitor="val_loss", mode="min", save_top_k=1, filename="best")
     stop = EarlyStopping(monitor="val_loss", mode="min", patience=PATIENCE)
