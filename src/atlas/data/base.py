@@ -1046,6 +1046,15 @@ class DataPullClient(ABC):
     async def search(self, request: PullRequest) -> PullResult:
         raise NotImplementedError
 
+    # Credential variables an asset download from this source needs. A 401 or 403
+    # on an Earthdata-hosted file names them instead of the login redirect.
+    download_credentials: ClassVar[tuple[str, ...]] = ()
+
+    def download_headers(self, href: str) -> Mapping[str, str]:
+        """Headers to send when downloading ``href``. Most sources need none."""
+        del href
+        return {}
+
     async def search_from_cursor(self, request: PullRequest, page_cursor: str) -> PullResult:
         """Continue a search from a stored page cursor.
 
