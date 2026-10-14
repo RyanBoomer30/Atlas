@@ -201,6 +201,29 @@ Read:
   the first ~540 steps and later epochs overfit. A lower learning rate or a smaller
   per-epoch step count is the next thing to try, not a larger model.
 
+## Hidden-size sweep (`sweep_hidden.py`)
+
+The change-target configuration above, unchanged except `hidden_size`; weight decay
+kept at 1e-2 (picked at 64, not re-tuned), seeds 42–44, no spatial holdout. Equivalence
+check PASS at every size. Retraining hidden 64 reproduced the earlier run exactly
+(max |Δ test MSE| = 0), so training is deterministic. Raw: [`metrics_v2_hidden/`](metrics_v2_hidden/).
+
+Test MSE (2021–2024), mean over seeds (min–max) and vs persistence:
+
+| hidden | params | All states | Kansas | Texas | California | best epoch (per seed) | mean best val MSE |
+|---|---|---|---|---|---|---|---|
+| **64** | 41k | **0.0674** (0.0660–0.0696), −18.6% | **0.0488**, −2.6% | 0.0708, −15.0% | **0.0822**, −35.5% | 1 / 1 / 1 | **0.0777** |
+| 128 | 148k | 0.0693 (0.0673–0.0725), −16.2% | 0.0535, +6.7% | 0.0709, −14.8% | 0.0865, −32.1% | 1 / 9 / 1 | 0.0876 |
+| 256 | 558k | 0.0677 (0.0626–0.0721), −18.2% | 0.0520, +3.8% | **0.0682**, −18.0% | 0.0879, −31.1% | 15 / 3 / 7 | 0.0828 |
+| persistence | | 0.0828 | 0.0501 | 0.0832 | 0.1275 | | |
+
+Read: no size is better than 64 beyond the seed spread. 256 has the single best test run
+(seed 43, 0.0626) and the best Texas mean, but also the widest spread (0.0626–0.0721) and
+is worse in Kansas and California; 128 is worse on average. On validation, the criterion
+a size should be chosen by, 64 is best (0.0777 vs 0.0876 and 0.0828). Larger models train
+longer before peaking (up to epoch 15) and cost far more: 2.1 min per model at 64, up to
+19 min at 256 on this CPU. Keep **hidden 64** as the teacher.
+
 ## Recommendation for teacher size
 
 Use the **change-target model at hidden 64** (40.6k parameters) as the teacher. It is the
@@ -229,6 +252,7 @@ then sweep 32 / 64 / 128 and keep the smallest size within the seed spread
 | Training, + SPEI history, main model | 11.2 min |
 | Training, + SPEI history, spatial-holdout model | 8.8 min |
 | `train_v2_delta.py` (3 weight-decay fits + 3 seeds × 2 models, early stopped) | 16 min |
+| `sweep_hidden.py` (3 sizes × 3 seeds) | 57 min |
 
 With 8 concurrent granule reads, a 108-month Texas chunk (14,124 cells × 12 variables)
 took 56–90 s, i.e. under 1 s per month, against the ~5 s per month the sequential extractor took.
