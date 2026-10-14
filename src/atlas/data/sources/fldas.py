@@ -49,6 +49,9 @@ _X_LAST = 3599
 _Y_LAST = 1499
 _RETRY_STATUSES = frozenset({502, 503, 504})
 
+# Granule reads in flight at once during an extract.
+DEFAULT_CONCURRENCY = 8
+
 DEFAULT_VARIABLES: tuple[str, ...] = (
     "SoilMoi00_10cm_tavg",
     "SoilMoi10_40cm_tavg",
@@ -166,6 +169,18 @@ class TrainingTable:
             writer.writerows(self.rows)
         self.path = path
         return path
+
+
+def _append_rows(
+    path: Path, columns: Sequence[str], rows: Sequence[list[str]], *, fresh: bool
+) -> None:
+    r"""Append ``rows`` to the table at ``path``; ``fresh`` starts it over with the header."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w" if fresh else "a", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, lineterminator="\n")
+        if fresh:
+            writer.writerow(list(columns))
+        writer.writerows(rows)
 
 
 def resolve_variables(variables: Sequence[str] | None) -> tuple[str, ...]:
@@ -333,14 +348,16 @@ class FldasClient(DataPullClient):
         points: Sequence[tuple[float, float]] | None = None,
         variables: Sequence[str] | None = None,
         on_progress: Callable[[int, int], None] | None = None,
+        concurrency: int = DEFAULT_CONCURRENCY,
     ) -> TrainingTable:
         """Subset every granule once and return the training rows.
 
         One OPeNDAP request per granule covers all variables and all cells; the
-        constraint window is the smallest axis span the cells need. A granule
-        that still fails after the request retries is skipped. Months that
-        succeeded are kept, and the table is rewritten after each one when
-        ``table_path`` is set. An authentication failure stops the run.
+        constraint window is the smallest axis span the cells need. Up to
+        ``concurrency`` granules are read at once, and rows stay in month order.
+        A granule that still fails after the request retries is skipped. Months
+        that succeeded are kept, and each one is appended to ``table_path`` in
+        month order when it is set. An authentication failure stops the run.
 
         Raises:
             FldasRequestError: if the request cannot be served by the grid.
@@ -372,33 +389,58 @@ class FldasClient(DataPullClient):
         rows: list[list[str]] = []
         skipped: list[str] = []
         ordered = sorted(scenes, key=lambda scene: (scene.datetime, scene.id))
-        for index, scene in enumerate(ordered, start=1):
-            stamp = _utc(scene.datetime).date().isoformat()
-            try:
-                arrays = await self._read_granule(scene, names, x_lo, x_hi, y_lo, y_hi)
-            except FldasAuthError:
-                raise
-            except (FldasError, httpx.HTTPError, OSError) as exc:
-                skipped.append(f"{stamp} ({scene.id}): {exc}")
-                if on_progress is not None:
-                    on_progress(index, len(ordered))
-                continue
-            for cell in cells:
-                row = [_number(cell.lon), _number(cell.lat)]
-                if points is not None:
-                    row.extend((_number(x_axis.values[cell.x]), _number(y_axis.values[cell.y])))
-                row.append(stamp)
-                row.extend(
-                    _cell_text(_array_value(arrays, name, cell, x_lo, x_hi, y_lo, y_hi))
-                    for name in names
-                )
-                rows.append(row)
-            if self.table_path is not None and rows:
-                TrainingTable(columns=columns, rows=rows, skipped=list(skipped)).write_csv(
-                    self.table_path
-                )
-            if on_progress is not None:
-                on_progress(index, len(ordered))
+        limit = asyncio.Semaphore(max(1, concurrency))
+
+        async def read(scene: Scene) -> dict[str, _Array]:
+            async with limit:
+                return await self._read_granule(scene, names, x_lo, x_hi, y_lo, y_hi)
+
+        finished = 0
+
+        def report(task: asyncio.Future[dict[str, _Array]]) -> None:
+            nonlocal finished
+            if task.cancelled() or on_progress is None:
+                return
+            finished += 1
+            on_progress(finished, len(ordered))
+
+        tasks = [asyncio.ensure_future(read(scene)) for scene in ordered]
+        for task in tasks:
+            task.add_done_callback(report)
+        # Months finish in any order; rows are kept and written in month order.
+        # The table on disk grows by appending each finished month, so it is
+        # never rewritten whole while the extract runs.
+        written = 0
+        try:
+            for scene, task in zip(ordered, tasks, strict=True):
+                stamp = _utc(scene.datetime).date().isoformat()
+                try:
+                    arrays = await task
+                except FldasAuthError:
+                    raise
+                except (FldasError, httpx.HTTPError, OSError) as exc:
+                    skipped.append(f"{stamp} ({scene.id}): {exc}")
+                    arrays = None
+                if arrays is not None:
+                    for cell in cells:
+                        row = [_number(cell.lon), _number(cell.lat)]
+                        if points is not None:
+                            row.extend(
+                                (_number(x_axis.values[cell.x]), _number(y_axis.values[cell.y]))
+                            )
+                        row.append(stamp)
+                        row.extend(
+                            _cell_text(_array_value(arrays, name, cell, x_lo, x_hi, y_lo, y_hi))
+                            for name in names
+                        )
+                        rows.append(row)
+                    if self.table_path is not None and len(rows) > written:
+                        _append_rows(self.table_path, columns, rows[written:], fresh=written == 0)
+                        written = len(rows)
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
         table = TrainingTable(columns=columns, rows=rows, skipped=skipped)
         if not rows:

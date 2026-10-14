@@ -415,6 +415,72 @@ async def test_a_failed_month_is_skipped_and_the_rest_are_kept(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+async def test_granules_are_read_concurrently_up_to_the_limit(tmp_path: Path) -> None:
+    fake = FakeFldas()
+    client = fake.client(token="token", table_path=tmp_path / "fldas.csv")
+    in_flight = 0
+    peak = 0
+    progress: list[tuple[int, int]] = []
+
+    async def slow(scene: Scene, names: object, x_lo: int, x_hi: int, y_lo: int, y_hi: int):
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        # Later days finish first, so completion order is the reverse of month order.
+        await asyncio.sleep(0.01 * (10 - scene.datetime.day))
+        in_flight -= 1
+        return await FldasClient._read_granule(client, scene, names, x_lo, x_hi, y_lo, y_hi)
+
+    client._read_granule = slow  # type: ignore[method-assign]
+    scenes = [_scene(f"g{day}", day=day) for day in (5, 2, 4, 3, 6)]
+    try:
+        table = await client.extract_training_table(
+            _request(),
+            scenes,
+            variables=["Evap_tavg"],
+            concurrency=3,
+            on_progress=lambda done, total: progress.append((done, total)),
+        )
+    finally:
+        await client.aclose()
+    assert peak == 3
+    days = [row["time"] for row in _rows(table)[::9]]
+    assert days == [f"2020-01-0{day}" for day in (2, 3, 4, 5, 6)]
+    assert progress == [(done, 5) for done in range(1, 6)]
+    lines = (tmp_path / "fldas.csv").read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "longitude,latitude,time,Evap_tavg"
+    assert [line.split(",")[2] for line in lines[1::9]] == days
+
+
+@pytest.mark.asyncio
+async def test_an_auth_failure_stops_the_concurrent_reads() -> None:
+    fake = FakeFldas()
+    client = fake.client(token="token")
+    started: list[str] = []
+
+    async def denied(scene: Scene, *_args: object):
+        started.append(scene.id)
+        if scene.id == "g2":
+            raise FldasAuthError("refused")
+        await asyncio.sleep(10)
+        raise AssertionError("a read outlived the auth failure")
+
+    client._read_granule = denied  # type: ignore[method-assign]
+    try:
+        with pytest.raises(FldasAuthError):
+            await client.extract_training_table(
+                _request(),
+                [_scene(f"g{day}", day=day) for day in range(2, 8)],
+                variables=["Evap_tavg"],
+                concurrency=2,
+            )
+    finally:
+        await client.aclose()
+    assert "g2" in started
+    assert len(started) <= 3
+
+
+@pytest.mark.asyncio
 async def test_points_produce_one_data_request_and_cell_columns(tmp_path: Path) -> None:
     points_file = tmp_path / "points.csv"
     points_file.write_text(
