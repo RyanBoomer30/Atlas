@@ -48,6 +48,17 @@ _AXIS_EPSILON = 1e-6
 _X_LAST = 3599
 _Y_LAST = 1499
 _RETRY_STATUSES = frozenset({502, 503, 504})
+# Retries after the first try: for 5xx, timeouts and dropped connections, and for an
+# auth-looking reply once the token has worked in this extract.
+_RETRIES = 2
+_AUTH_RETRIES = 3
+_TRANSPORT_ERRORS = (
+    httpx.TimeoutException,
+    httpx.RemoteProtocolError,
+    httpx.ReadError,
+    httpx.WriteError,
+    httpx.ConnectError,
+)
 
 # Granule reads in flight at once during an extract.
 DEFAULT_CONCURRENCY = 8
@@ -285,6 +296,8 @@ class FldasClient(DataPullClient):
         self._username = username or os.environ.get("EARTHDATA_USERNAME") or None
         self._password = password or os.environ.get("EARTHDATA_PASSWORD") or None
         self.table_path = table_path
+        # Set once a request in the current extract succeeds with these credentials.
+        self._token_worked = False
 
     @property
     def collection(self) -> str:
@@ -377,6 +390,7 @@ class FldasClient(DataPullClient):
         if not self._token:
             raise FldasAuthError(MISSING_TOKEN_MESSAGE)
 
+        self._token_worked = False
         base_url = _opendap_href(scenes[0])
         x_axis, y_axis = await self._read_axes(base_url)
         cells = _plan_cells(request.bbox, x_axis, y_axis, points)
@@ -477,35 +491,47 @@ class FldasClient(DataPullClient):
 
     async def _get_text(self, url: str) -> str:
         last_status = 0
-        for attempt in range(3):
+        attempt = 0
+        while True:
             headers, auth = self._request_auth()
             try:
                 resp = await self._client.get(url, headers=headers, auth=auth)
-            except httpx.TimeoutException:
-                if attempt < 2:
-                    await asyncio.sleep(0.5 * (attempt + 1))
+            except _TRANSPORT_ERRORS as exc:
+                if attempt < _RETRIES:
+                    attempt += 1
+                    await asyncio.sleep(0.5 * attempt)
                     continue
-                raise FldasError("Earthdata OPeNDAP timed out. Run the command again.") from None
-            if resp.status_code == 401 or _looks_like_html(resp.text):
-                raise FldasAuthError(_AUTH_HELP)
-            if resp.status_code == 403 and not _transient_archive(resp.text):
+                if isinstance(exc, httpx.TimeoutException):
+                    raise FldasError(
+                        "Earthdata OPeNDAP timed out. Run the command again."
+                    ) from None
+                raise FldasError(
+                    "Earthdata OPeNDAP dropped the connection. Run the command again."
+                ) from None
+            if _auth_refused(resp):
+                # Under a burst of reads Earthdata now and then answers one with a
+                # 401 or the login page although this token was just accepted.
+                # Retry that with a longer backoff. A token that has not worked
+                # yet in this extract still fails at once.
+                if self._token_worked and attempt < _AUTH_RETRIES:
+                    attempt += 1
+                    await asyncio.sleep(2.0 * attempt)
+                    continue
                 raise FldasAuthError(_AUTH_HELP)
             if resp.status_code in _RETRY_STATUSES or (
                 resp.status_code == 403 and _transient_archive(resp.text)
             ):
                 last_status = resp.status_code
-                if attempt < 2:
-                    await asyncio.sleep(0.5 * (attempt + 1))
+                if attempt < _RETRIES:
+                    attempt += 1
+                    await asyncio.sleep(0.5 * attempt)
                     continue
                 raise FldasError(
-                    f"Earthdata OPeNDAP returned {resp.status_code}. Run the command again."
+                    f"Earthdata OPeNDAP returned {last_status}. Run the command again."
                 )
             resp.raise_for_status()
-            text = resp.text
-            if _looks_like_html(text):
-                raise FldasAuthError(_AUTH_HELP)
-            return text
-        raise FldasError(f"Earthdata OPeNDAP returned {last_status}. Run the command again.")
+            self._token_worked = True
+            return resp.text
 
     def _request_auth(self) -> tuple[dict[str, str], httpx.Auth | None]:
         """Bearer token first, then basic auth; netrc stays with the http client."""
@@ -955,6 +981,13 @@ def _data_name(raw_name: str) -> str:
     if "." not in tail and head == tail:
         return head
     return raw_name
+
+
+def _auth_refused(resp: httpx.Response) -> bool:
+    """401, a login page, or a 403 that is not Hyrax failing to read the archive."""
+    if resp.status_code == 401 or _looks_like_html(resp.text):
+        return True
+    return resp.status_code == 403 and not _transient_archive(resp.text)
 
 
 def _transient_archive(text: str) -> bool:
