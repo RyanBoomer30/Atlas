@@ -158,11 +158,29 @@ def load_daily():
         return {k: f[k] for k in f.files}
 
 
-def window_inputs(vci_daily, day_index):
-    """Input for anchor day index i: 12 mean-VCI blocks of 30 days, oldest first -> (cells, 12, 1)."""
-    csum = np.concatenate([np.zeros((len(vci_daily), 1)), np.cumsum(vci_daily, axis=1)], axis=1)
+def prefix_sums(vci_daily):
+    """Running sums of finite daily VCI and of finite-day counts, for O(1) block means.
+
+    Days without VCI (before the first composite) count as missing rather than turning
+    every later running sum into NaN.
+    """
+    finite = np.isfinite(vci_daily)
+    zero = np.zeros((len(vci_daily), 1))
+    total = np.concatenate([zero, np.cumsum(np.where(finite, vci_daily, 0.0), axis=1)], axis=1)
+    count = np.concatenate([zero, np.cumsum(finite, axis=1)], axis=1)
+    return total, count
+
+
+def window_inputs(vci_daily, day_index, prefix=None):
+    """Input for anchor day index i: 12 mean-VCI blocks of 30 days, oldest first -> (cells, 12, 1).
+
+    Only days up to and including i are read.
+    """
+    total, count = prefix if prefix is not None else prefix_sums(vci_daily[:, : day_index + 1])
     ends = day_index - BLOCK_DAYS * np.arange(BLOCKS - 1, -1, -1)  # inclusive block ends
-    means = (csum[:, ends + 1] - csum[:, ends + 1 - BLOCK_DAYS]) / BLOCK_DAYS
+    n = count[:, ends + 1] - count[:, ends + 1 - BLOCK_DAYS]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        means = (total[:, ends + 1] - total[:, ends + 1 - BLOCK_DAYS]) / n
     return ((means - 50.0) / 25.0)[:, :, None].astype(np.float32)
 
 
@@ -185,11 +203,12 @@ def samples_for(daily, anchor_indices):
     days = pd.DatetimeIndex(daily["days"])
     vci, sm = daily["vci"], daily["sm"]
     csum_sm = np.concatenate([np.zeros((len(sm), 1)), np.cumsum(sm, axis=1)], axis=1)
+    prefix = prefix_sums(vci)
     xs, ys, ps, anchors, splits = [], [], [], [], []
     for i in anchor_indices:
         if i + LEAD_DAYS >= len(days):
             continue
-        xs.append(window_inputs(vci, i))
+        xs.append(window_inputs(vci, i, prefix))
         ys.append((csum_sm[:, i + 1 + LEAD_DAYS] - csum_sm[:, i + 1]) / LEAD_DAYS)
         ps.append((csum_sm[:, i + 1] - csum_sm[:, i + 1 - LEAD_DAYS]) / LEAD_DAYS)
         start, end = days[i + 1].strftime("%Y-%m-%d"), days[i + LEAD_DAYS].strftime("%Y-%m-%d")
