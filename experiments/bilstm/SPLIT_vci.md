@@ -80,3 +80,34 @@ python experiments/bilstm/train_vci.py
 - VCI min/max from 15 years per calendar month is a short reference; long-record VCI
   products (AVHRR, from 1981) use 30+ years.
 - The label is a land-surface model output, not measured soil moisture.
+
+## Daily inference (VCI only)
+
+`download_vci16.py`, `data_vci_daily.py`, `train_vci_daily.py`, `predict_vci_daily.py`.
+VCI is the **only** input: no soil-moisture history and no month-of-year encoding.
+
+- **NDVI source**: MODIS 16-day NDVI on the same 0.05° grid, Terra MOD13C1 (571 composites
+  from 2000-02-18) and Aqua MYD13C1 (518 from 2002-07-04). Together they give a new composite
+  about every 8 days. These products are not on OPeNDAP, so each ~105 MB global file is
+  cropped to the box and deleted (1,089 files, 19 minutes, 304 MB kept).
+- **VCI** per pixel and composite: 100 × (NDVI − min) / (max − min), with min/max over
+  2000–2014 for the same sensor and 16-day slot. Same pixel rules and clip as the monthly
+  version; cell value = mean over valid pixels.
+- **Daily VCI**: on day d, a cell's VCI is that of the latest composite already complete by d
+  (a composite starting on s is used from s + 16). Days never see a later composite; a check in
+  development confirmed that changing every day after d leaves d's input unchanged.
+- **Input for issue day d**: 12 blocks of 30 days (d−359 … d), each the mean daily VCI,
+  scaled (VCI − 50) / 25. Shape (12, 1).
+- **Label**: mean FLDAS 0–100 cm soil-moisture anomaly over d+1 … d+30. FLDAS is monthly, so
+  each day carries its month's anomaly and the 30 days are averaged.
+- **Split**: a sample belongs to a split only when its 30-day label window lies wholly inside
+  it (train 2001-01-01 … 2014-12-31, val 2016–2019, test 2021–2024); windows that straddle a
+  boundary are dropped. First issue day: 2001-04-16.
+- **Training**: issue days every 5 days (357,564 train and 102,674 val samples), level target,
+  same recipe and seeds as above. **Test**: every issue day of 2020-12-31 … 2024-12-01
+  (514,088 samples).
+- **Inference**: `python predict_vci_daily.py --date YYYY-MM-DD [--out file.csv]` averages the
+  three seed models and writes one row per cell (VCI of the last 30 days, predicted anomaly
+  for the next 30 days, and the actual anomaly and persistence when FLDAS covers the window).
+  Dates after 2024-12-31 need newer composites, downloaded with `download_vci16.py --end`, and
+  a rebuild with `data_vci_daily.py`.

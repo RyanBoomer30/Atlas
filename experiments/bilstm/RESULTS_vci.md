@@ -62,6 +62,40 @@ SM history only −0.0409…−0.0006, −0.0353…+0.0035, −0.0471…−0.009
   estimate (r 0.42). If the soil-moisture history is available, VCI is only worth adding
   for Kansas-like cropland.
 
+## Daily inference, VCI only (`train_vci_daily.py`)
+
+A forecast issued every day of 2021–2024 for the next 30 days (514,088 samples). Input is
+VCI alone. Mean over seeds 42–44 (min–max); "ensemble" averages the three models as
+`predict_vci_daily.py` does.
+
+| Test MSE | All states | Kansas | Texas | California | r (all) |
+|---|---|---|---|---|---|
+| Climatology (anomaly 0) | 0.883 | 0.757 | 0.829 | 1.240 | — |
+| Persistence (last 30 days) | 0.218 | 0.172 | 0.243 | 0.199 | — |
+| **VCI only, daily** | **0.749** (0.735–0.757) | 0.671 | 0.710 | 0.992 | 0.353 |
+| VCI only, daily, 3-seed ensemble | 0.745 | 0.666 | 0.706 | 0.986 | 0.355 |
+| vs climatology | −15.1% | −11.4% | −14.3% | −20.0% | |
+
+- **Issue days on month-ends only**: 0.802, −14.2% vs climatology (0.935). The monthly
+  MOD13C2 VCI-only model above scored 0.783 on the same kind of target, so issuing daily from
+  16-day composites costs nothing in skill and gives a fresh forecast every day.
+- **Unseen 2°×2° blocks**: 0.869 vs climatology 0.927 (−6.3%). Texas −13.9% and California
+  −3.9% hold up, but **Kansas is worse than climatology on unseen blocks** (+23.4%,
+  r 0.08). VCI's link to soil moisture in Kansas does not transfer to Kansas cells the model
+  never saw.
+- **Persistence is still far better** (0.218): the VCI-only model has 3.4× its error, and the
+  bootstrap interval of the gap is +0.43 … +0.63 for every seed. Persistence needs the
+  soil-moisture record, which this model deliberately does not use.
+- Best epoch 1 for every seed (spatial seed 42: epoch 2); about 3.8 minutes per model.
+- Equivalence check on seed 42: PASS.
+
+![Daily forecasts, 2021-2024](figures_vci_daily/test_daily_series.png)
+
+The figure shows what VCI can and cannot do. The model follows the slow drought swings
+(Kansas 2022–23, Texas 2022) but lags or misses sharp wet-ups (California winter 2022–23),
+because vegetation greens weeks after the soil wets. It also stays near the middle where
+the actual anomaly is extreme.
+
 ## Equivalence and runtimes
 
 `check_equivalence.run` on seed 42 of every variant: PASS (float32 and float64).

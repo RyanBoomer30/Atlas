@@ -1,0 +1,171 @@
+{
+  "effective_cells": {
+    "kansas": 2.8788411490507246,
+    "texas": 3.637737295282149,
+    "california": 2.954978238083686
+  },
+  "state_shares": {
+    "kansas": 0.30394593471579384,
+    "texas": 0.3840696326122837,
+    "california": 0.31198443267192244
+  },
+  "runs": {
+    "42": {
+      "best_epoch": 1,
+      "epochs_run": 5,
+      "best_val": 1.2994037866592407,
+      "seconds": 226.2,
+      "spatial": {
+        "best_epoch": 2,
+        "epochs_run": 6,
+        "seconds": 206.8
+      }
+    },
+    "equivalence_pass": true,
+    "43": {
+      "best_epoch": 1,
+      "epochs_run": 5,
+      "best_val": 1.2839418649673462,
+      "seconds": 227.0,
+      "spatial": {
+        "best_epoch": 1,
+        "epochs_run": 5,
+        "seconds": 172.9
+      }
+    },
+    "44": {
+      "best_epoch": 1,
+      "epochs_run": 5,
+      "best_val": 1.2835830450057983,
+      "seconds": 221.7,
+      "spatial": {
+        "best_epoch": 1,
+        "epochs_run": 5,
+        "seconds": 169.0
+      }
+    }
+  },
+  "spatial": {
+    "blocks": 41,
+    "held_out_blocks": 8
+  },
+  "mse_gap_vs_persistence": {
+    "seed42": {
+      "overall": {
+        "mse_gap": 0.5396571159362793,
+        "ci95": [
+          0.4540414225284575,
+          0.6327432676706478
+        ]
+      },
+      "kansas": {
+        "mse_gap": 0.5087477564811707,
+        "ci95": [
+          0.379929489150387,
+          0.6418733633563742
+        ]
+      },
+      "texas": {
+        "mse_gap": 0.4783000648021698,
+        "ci95": [
+          0.3706315724546353,
+          0.5952175953979594
+        ]
+      },
+      "california": {
+        "mse_gap": 0.7903610467910767,
+        "ci95": [
+          0.6266106575092809,
+          0.9761849832228071
+        ]
+      }
+    },
+    "seed43": {
+      "overall": {
+        "mse_gap": 0.5174679160118103,
+        "ci95": [
+          0.43428866535087746,
+          0.6079454927953323
+        ]
+      },
+      "kansas": {
+        "mse_gap": 0.4871481955051422,
+        "ci95": [
+          0.36815482437905767,
+          0.607353417528805
+        ]
+      },
+      "texas": {
+        "mse_gap": 0.4533737301826477,
+        "ci95": [
+          0.3494086631923419,
+          0.5680602704987943
+        ]
+      },
+      "california": {
+        "mse_gap": 0.7765618562698364,
+        "ci95": [
+          0.6120794404294402,
+          0.9640997532142497
+        ]
+      }
+    },
+    "seed44": {
+      "overall": {
+        "mse_gap": 0.5378276705741882,
+        "ci95": [
+          0.45032591921760995,
+          0.6329827126319391
+        ]
+      },
+      "kansas": {
+        "mse_gap": 0.5019724369049072,
+        "ci95": [
+          0.3730499156507133,
+          0.629783340462985
+        ]
+      },
+      "texas": {
+        "mse_gap": 0.47166702151298523,
+        "ci95": [
+          0.3662899716097448,
+          0.585161681744388
+        ]
+      },
+      "california": {
+        "mse_gap": 0.8117444515228271,
+        "ci95": [
+          0.6337424191402488,
+          1.011353887608082
+        ]
+      }
+    }
+  },
+  "data": {
+    "kansas": {
+      "cells": 88,
+      "composite_cell_values_missing": 744,
+      "share_missing": 0.0078,
+      "median_valid_pixels": 100
+    },
+    "texas": {
+      "cells": 209,
+      "composite_cell_values_missing": 18,
+      "share_missing": 0.0001,
+      "median_valid_pixels": 100
+    },
+    "california": {
+      "cells": 62,
+      "composite_cell_values_missing": 992,
+      "share_missing": 0.0147,
+      "median_valid_pixels": 93
+    },
+    "composites": {
+      "MOD13C1": 571,
+      "MYD13C1": 518
+    },
+    "first_usable_day": "2000-03-05"
+  },
+  "train_stride_days": 5,
+  "first_anchor": "2001-04-16"
+}
