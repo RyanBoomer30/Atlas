@@ -36,8 +36,14 @@ VARIANTS = {
         "change": True,
         "label": "VCI + SM history, change target",
     },
+    # Ablation: the same model without the VCI channel, to measure what VCI adds.
+    "sm_change": {
+        "sm_history": True,
+        "change": True,
+        "drop_vci": True,
+        "label": "SM history only, change target",
+    },
 }
-VARIANT_COLORS = {"vci_only": "#9c9a94", "vci_sm_change": INK}
 
 
 def baseline_rows(samples, mask, run):
@@ -56,6 +62,9 @@ def baseline_rows(samples, mask, run):
 def run_variant(key, spec, shares):
     samples = load_samples(sm_history=spec["sm_history"])
     D.INPUTS = VCI_FEATURES + ([SM_HISTORY_FEATURE] if spec["sm_history"] else [])
+    if spec.get("drop_vci"):
+        samples = samples | {"x": np.ascontiguousarray(samples["x"][:, :, 1:])}
+        D.INPUTS = D.INPUTS[1:]
     assert samples["x"].shape[2] == len(D.INPUTS)
     # A level target is the change target with persistence set to zero.
     train_samples = (
@@ -93,76 +102,85 @@ def run_variant(key, spec, shares):
 
 
 def figure_skill(table):
+    """Change-target models vs persistence: with and without the VCI channel."""
     test = table[table.run == "test"]
     base = test[test.variant == "persistence"].set_index("group").mse
     groups = ["overall", *STATE_NAMES]
     fig, ax = plt.subplots(figsize=(9, 4.4), facecolor=SURFACE)
-    width = 0.27
-    for j, key in enumerate(["climatology", *VARIANTS]):
+    width = 0.36
+    for j, key in enumerate(["sm_change", "vci_sm_change"]):
         for i, g in enumerate(groups):
             rel = test[(test.variant == key) & (test.group == g)].mse.to_numpy() / base[g] - 1
-            x = i + (j - 1) * width
-            color = (
-                "#d6d4ce"
-                if key == "climatology"
-                else (STATE_COLORS.get(g, INK) if key == "vci_sm_change" else "#9c9a94")
-            )
+            x = i + (j - 0.5) * width
+            color = "#b5b3ad" if key == "sm_change" else STATE_COLORS.get(g, INK)
             ax.bar(x, rel.mean(), width - 0.04, color=color, edgecolor=SURFACE, linewidth=2)
-            if len(rel) > 1:
-                ax.plot([x] * len(rel), rel, "o", color=INK, markersize=3, zorder=3)
+            ax.plot([x] * len(rel), rel, "o", color=INK, markersize=3, zorder=3)
             ax.text(
                 x,
-                rel.mean() + (0.03 if rel.mean() >= 0 else -0.03),
-                f"{rel.mean():+.0%}",
+                min(rel.min(), rel.mean()) - 0.004,
+                f"{rel.mean():+.1%}",
                 ha="center",
-                va="bottom" if rel.mean() >= 0 else "top",
-                color=INK_2,
-                fontsize=7,
+                va="top",
+                color=INK,
+                fontsize=8,
             )
-    handles = [plt.Rectangle((0, 0), 1, 1, color=c) for c in ("#d6d4ce", "#9c9a94", INK)]
+    handles = [plt.Rectangle((0, 0), 1, 1, color=c) for c in ("#b5b3ad", INK)]
     ax.legend(
         handles,
-        [
-            "climatology (anomaly 0)",
-            VARIANTS["vci_only"]["label"],
-            VARIANTS["vci_sm_change"]["label"] + " (state color)",
-        ],
+        [VARIANTS["sm_change"]["label"], VARIANTS["vci_sm_change"]["label"] + " (state color)"],
         frameon=False,
         labelcolor=INK,
         fontsize=8,
-        loc="upper left",
+        loc="lower left",
     )
     ax.axhline(0, color=INK_2, linewidth=1)
-    ax.text(len(groups) - 0.5, 0, "persistence", color=INK_2, va="bottom", ha="right", fontsize=8)
+    ax.text(-0.45, 0.002, "persistence", color=INK_2, va="bottom", fontsize=8)
     ax.set_xticks(range(len(groups)))
     ax.set_xticklabels([LABELS.get(g, "All states") for g in groups])
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:+.0%}"))
-    style(ax, "Soil-moisture anomaly, test 2021-2024: MSE vs persistence", "", "MSE vs persistence")
+    lo = test[test.variant.isin(["sm_change", "vci_sm_change"])]
+    worst = (lo.mse.to_numpy() / lo.group.map(base).to_numpy() - 1).min()
+    ax.set_ylim(worst - 0.03, 0.03)
+    style(
+        ax,
+        "Soil-moisture anomaly, test 2021-2024: MSE vs persistence (dots = seeds)",
+        "",
+        "MSE vs persistence",
+    )
     fig.tight_layout()
     fig.savefig(FIG / "skill_vs_persistence.png", dpi=160)
     plt.close(fig)
 
 
-def figure_series(samples, preds):
+def series_table(samples, preds):
+    """State-mean test series per month: actual, persistence and each variant's forecast."""
     test = samples["split"] == "test"
     frame = pd.DataFrame(
         {
-            "state": samples["state"][test],
-            "month": pd.PeriodIndex(samples["target_month"][test], freq="M").to_timestamp(),
+            "state": np.array(STATE_NAMES)[samples["state"][test]],
+            "month": samples["target_month"][test],
             "actual": samples["y"][test],
             "persistence": samples["persistence"][test],
-            **{k: v for k, v in preds.items()},
+            **preds,
         }
     )
-    fig, axes = plt.subplots(3, 1, figsize=(9, 8), facecolor=SURFACE, sharex=True)
-    for i, (ax, state) in enumerate(zip(axes, STATE_NAMES, strict=True)):
-        m = frame[frame.state == i].groupby("month").mean(numeric_only=True)
-        ax.plot(m.index, m.actual, color=STATE_COLORS[state], linewidth=2.5, label="FLDAS (actual)")
-        ax.plot(
-            m.index, m.persistence, color=GRID, linewidth=1.5, linestyle="--", label="persistence"
-        )
-        ax.plot(m.index, m.vci_only, color="#9c9a94", linewidth=1.5, label="VCI only")
-        ax.plot(m.index, m.vci_sm_change, color=INK, linewidth=1.5, label="VCI + SM history")
+    return frame.groupby(["state", "month"]).mean(numeric_only=True).reset_index()
+
+
+def figure_series(series):
+    fig, axes = plt.subplots(3, 1, figsize=(9, 8.4), facecolor=SURFACE, sharex=True)
+    lines = [
+        ("persistence", dict(color=GRID, linewidth=1.5, linestyle="--"), "persistence"),
+        ("vci_only", dict(color="#9c9a94", linewidth=1.3, linestyle=":"), "VCI only"),
+        ("sm_change", dict(color="#b5b3ad", linewidth=1.3), "SM history only"),
+        ("vci_sm_change", dict(color=INK, linewidth=1.6), "VCI + SM history"),
+    ]
+    for ax, state in zip(axes, STATE_NAMES, strict=True):
+        m = series[series.state == state]
+        when = pd.PeriodIndex(m.month, freq="M").to_timestamp()
+        ax.plot(when, m.actual, color=STATE_COLORS[state], linewidth=2.5)
+        for key, kw, _ in lines:
+            ax.plot(when, m[key], **kw)
         ax.axhline(0, color=INK_2, linewidth=0.8)
         style(
             ax,
@@ -170,9 +188,14 @@ def figure_series(samples, preds):
             "",
             "anomaly (z)",
         )
-        if i == 0:
-            ax.legend(frameon=False, labelcolor=INK, fontsize=8, ncol=4, loc="lower left")
-    fig.tight_layout()
+    handles = [plt.Line2D([], [], color=INK_2, linewidth=2.5)] + [
+        plt.Line2D([], [], **kw) for _, kw, _ in lines
+    ]
+    labels = ["FLDAS actual (state color)"] + [label for _, _, label in lines]
+    fig.legend(
+        handles, labels, frameon=False, labelcolor=INK, fontsize=8, ncol=5, loc="upper center"
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.965))
     fig.savefig(FIG / "test_series.png", dpi=150)
     plt.close(fig)
 
@@ -215,8 +238,10 @@ def main():
     summary["data"] = json.loads(SUMMARY_JSON.read_text())
     (METRICS / "summary.json").write_text(json.dumps(summary, indent=2, default=str))
     print(agg.round(4).to_string(index=False))
+    series = series_table(samples, preds)
+    series.round(4).to_csv(METRICS / "test_series_state_mean.csv", index=False)
     figure_skill(table)
-    figure_series(samples, preds)
+    figure_series(series)
     assert all(summary[k]["runs"]["equivalence_pass"] for k in VARIANTS), "equivalence FAILED"
 
 
