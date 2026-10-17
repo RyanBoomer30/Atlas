@@ -13,6 +13,7 @@ label change:
 """
 
 import json
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -70,7 +71,8 @@ def pixel_vci(ndvi, months):
     for m in range(1, 13):
         sel = cal == m
         ref = ndvi[sel & stats]
-        with np.errstate(all="ignore"):
+        with warnings.catch_warnings():  # ocean pixels are all-NaN
+            warnings.simplefilter("ignore", RuntimeWarning)
             lo, hi = np.nanmin(ref, axis=0), np.nanmax(ref, axis=0)
         span = hi - lo
         usable = np.isfinite(span) & (span >= MIN_NDVI_RANGE)
@@ -104,12 +106,14 @@ def cell_vci(vci, lat, lon, cells):
 def fill_gaps(series, months):
     """Carry the last value forward (causal); leading gaps get the train-year monthly mean."""
     frame = pd.DataFrame(series.T)
-    filled = frame.ffill().to_numpy().T
+    filled = frame.ffill().to_numpy().T.copy()
     years, cal = months.year.to_numpy(), months.month.to_numpy()
     stats = (years >= VCI_STATS_YEARS[0]) & (years <= VCI_STATS_YEARS[1])
     for m in range(1, 13):
         sel = cal == m
-        clim = np.nanmean(series[:, sel & stats], axis=1, keepdims=True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            clim = np.nanmean(series[:, sel & stats], axis=1, keepdims=True)
         filled[:, sel] = np.where(np.isnan(filled[:, sel]), clim, filled[:, sel])
     return filled
 
