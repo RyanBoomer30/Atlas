@@ -96,6 +96,42 @@ The figure shows what VCI can and cannot do. The model follows the slow drought 
 because vegetation greens weeks after the soil wets. It also stays near the middle where
 the actual anomaly is extreme.
 
+## Retraining on 2001–2023 to fix the offset: did not work (`train_vci_daily_recent.py`)
+
+Goal: remove the level offset by training up to the test year, as in deployment. Epoch
+count picked with 2023 as validation (best epoch 1 for every seed), then each seed retrained
+on all 2001–2023 windows (593,427 samples) for that many epochs. Test: every issue day whose
+30-day window lies in 2024 (120,983 samples). Input and label definitions unchanged. The
+2001–2014 models are scored on the same days.
+
+| 2024, all states | MSE | R² | r² | scale penalty | offset penalty | mean predicted | mean actual |
+|---|---|---|---|---|---|---|---|
+| Climatology (0) | **0.541** | −0.13 | — | — | 0.13 | 0.00 | −0.25 |
+| Persistence | 0.184 | 0.62 | 0.65 | 0.03 | 0.00 | −0.24 | −0.25 |
+| VCI, trained 2001–2014 | 0.660 | −0.37 | 0.10 | 0.20 | 0.28 | +0.12 | −0.25 |
+| VCI, trained 2001–2022 | 0.743 | −0.55 | 0.09 | 0.23 | 0.40 | +0.19 | −0.25 |
+| **VCI, trained 2001–2023** | 0.701 (seeds 0.647–0.760) | −0.46 | 0.09 | 0.19 | **0.37** | +0.17 | −0.25 |
+
+Per state (MSE, trained 2001–2023 vs 2001–2014 vs climatology): Kansas 0.868 / 0.757 / 0.402,
+Texas 0.733 / 0.696 / 0.648, California 0.357 / 0.402 / 0.374. Only California improves.
+
+**Why**: the VCI → soil-moisture relationship is not stable over time. With the 2001–2014
+fit (SM anomaly = −1.08 + 0.021 × VCI), soil moisture in 2015–2020 was wetter than VCI
+implied (+0.29 on average) and 2021–2024 drier (−0.34). In 2024 vegetation was greener than
+average (mean VCI 57.6, among the highest years), but 0–100 cm soil moisture was below normal
+(−0.25). A VCI-only model must call 2024 wet, and adding 2015–2023 to training raised its
+"wet" level instead of lowering it. Year table: `metrics_vci_daily_recent/vci_vs_sm_by_year.csv`.
+
+Likely causes, not separated here: the label is weighted 60% to the 40–100 cm layer, which
+recovers slowly, while vegetation responds to the upper layers; Terra (and later Aqua)
+drifted to earlier overpass times after about 2020, which can shift NDVI; and greening
+trends move VCI against a fixed 2000–2014 reference. One test year is also a small sample.
+
+Not adopted: `predict_vci_daily.py` keeps the 2001–2014 models. Equivalence check on the
+2001–2023 seed-42 model: PASS.
+
+![2024 forecasts](figures_vci_daily_recent/test_2024_series.png)
+
 ## Equivalence and runtimes
 
 `check_equivalence.run` on seed 42 of every variant: PASS (float32 and float64).

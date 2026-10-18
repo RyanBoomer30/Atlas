@@ -1,0 +1,51 @@
+{
+  "periods": {
+    "fit": [
+      "2001-01-01",
+      "2022-12-31"
+    ],
+    "val": [
+      "2023-01-01",
+      "2023-12-31"
+    ],
+    "test": [
+      "2024-01-01",
+      "2024-12-31"
+    ]
+  },
+  "full_train": [
+    "2001-01-01",
+    "2023-12-31"
+  ],
+  "effective_cells": {
+    "kansas": 2.6540997162543607,
+    "texas": 3.3289650697616193,
+    "california": 2.7890297394184365
+  },
+  "state_shares": {
+    "kansas": 0.3025616867851664,
+    "texas": 0.37949489259485153,
+    "california": 0.31794342061998204
+  },
+  "runs": {
+    "42": {
+      "phase1_best_epoch": 1,
+      "phase1_best_val_2023": 0.8521456718444824,
+      "phase1_epochs_run": 5,
+      "phase1_seconds": 531.7
+    },
+    "43": {
+      "phase1_best_epoch": 1,
+      "phase1_best_val_2023": 0.8961828947067261,
+      "phase1_epochs_run": 5,
+      "phase1_seconds": 518.3
+    },
+    "44": {
+      "phase1_best_epoch": 1,
+      "phase1_best_val_2023": 0.8381161093711853,
+      "phase1_epochs_run": 5,
+      "phase1_seconds": 496.5
+    },
+    "equivalence_pass": true
+  }
+}
