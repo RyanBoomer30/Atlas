@@ -116,8 +116,6 @@ def main():
             )
             ax.set_xticks(range(len(groups)))
             ax.set_xticklabels(groups)
-            if row == 0:
-                ax.legend(frameon=False, labelcolor=INK, fontsize=8, loc="lower left")
         lo = min(table[table.state.isin(STATE_NAMES)].skill_vs_climatology.min(), -0.05)
         hi = max(table[table.state.isin(STATE_NAMES)].skill_vs_climatology.max(), 0.05)
         axes[0, col].set_ylim(lo - 0.06, hi + 0.06)
@@ -130,7 +128,20 @@ def main():
         color=INK,
         fontsize=12,
     )
-    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    handles = [
+        plt.Rectangle((0, 0), 1, 1, color="#b5b3ad"),
+        plt.Rectangle((0, 0), 1, 1, color=INK_2),
+    ]
+    fig.legend(
+        handles,
+        ["one model for all three states", "one model per state (state color)"],
+        frameon=False,
+        labelcolor=INK,
+        fontsize=9,
+        ncol=2,
+        loc="upper right",
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
     fig.savefig(FIG / "per_state_vs_pooled.png", dpi=150)
     print(summary.round(3).to_string(index=False))
 

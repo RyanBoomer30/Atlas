@@ -182,6 +182,39 @@ weights, no recalibration, for the most reliable results. Use scale+offset only 
 soil-moisture labels are available and a bad year in exchange for better average skill is
 acceptable.
 
+## One model per state vs one model for all three (`vci_per_state.py`)
+
+Same setup as the tactics grid (VCI-only input, 10–40 cm label, uniform weights, raw output,
+rolling origin 2021–2024, seeds 42–44, one epoch), but each model trains on one state's cells
+only. Each gets as many training draws as the three-state model, so both take the same
+number of optimizer steps; the smaller states therefore see each sample more often (Kansas
+about 4×, California about 6×, Texas about 1.7×). The three states ran as parallel processes.
+
+Skill vs climatology, pooled 2021–2024 (per year in the figure):
+
+| State | One model for all three | One model per state | r² (all → per state) |
+|---|---|---|---|
+| Kansas | **0.000** | −0.109 | 0.070 → 0.056 |
+| Texas | **0.094** | −0.007 | 0.095 → 0.079 |
+| California | 0.055 | **0.099** | 0.044 → 0.051 |
+
+![Per-state vs three-state](figures_vci_per_state/per_state_vs_pooled.png)
+
+- **Pooling helps Kansas and Texas** and loses only in California. In every state, timing (r²)
+  is better or equal with the shared model in 3 of 4 years.
+- **The single-state models swing harder**: their worst years are worse (Kansas 2021 −0.98 vs
+  −0.60, Texas 2023 −0.51 vs −0.14, California 2023 −0.70 vs −0.35), consistent with
+  overfitting a few effective cells by reusing them several times.
+- **California gains** (2022: +0.31 vs −0.06): its VCI-to-soil-moisture relationship differs
+  most from the Great Plains', so it benefits from a model of its own.
+- Implication for scaling up: more regions help where the vegetation–soil-moisture
+  relationship is similar (Kansas and Texas help each other), and can hurt where it differs
+  (California). A national VCI-only model would likely help the Plains and dilute regions such
+  as California, unless the regions are trained separately.
+
+Raw: `metrics_vci_per_state/{kansas,texas,california}.csv`, comparison table
+`metrics_vci_per_state/comparison.csv`.
+
 ## Equivalence and runtimes
 
 `check_equivalence.run` on seed 42 of every variant: PASS (float32 and float64).
