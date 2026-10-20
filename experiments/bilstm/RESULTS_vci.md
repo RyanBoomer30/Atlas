@@ -132,6 +132,56 @@ Not adopted: `predict_vci_daily.py` keeps the 2001–2014 models. Equivalence ch
 
 ![2024 forecasts](figures_vci_daily_recent/test_2024_series.png)
 
+## VCI-only tactics that keep the input fixed (`vci_tactics.py`)
+
+The input is always the same daily VCI. Varied: the soil-moisture **label depth**,
+**recency weighting** of training draws (weight halves every 3.5 years back), and
+**recalibration** of the output: *scale* (linear map fitted on the training period) and
+*scale+offset* (also shift each test year by the mean error of the 12 months before it;
+this uses soil-moisture labels already known at issue time, not a model input).
+Rolling origin: each of 2021, 2022, 2023, 2024 forecast every day by models trained on
+2001 … the year before. One epoch per model (every early-stopped VCI run picked epoch 1),
+seeds 42–44, 96 models. Each label is scored against its own climatology.
+
+Skill vs climatology (1 − MSE / MSE of predicting 0), all states:
+
+| Label | Weighting | Calibration | Pooled 2021–24 | 2021 | 2022 | 2023 | 2024 |
+|---|---|---|---|---|---|---|---|
+| 0–100 cm | uniform | raw (**current**) | 0.044 | 0.192 | 0.072 | 0.029 | −0.281 |
+| **10–40 cm** | uniform | raw | **0.066** | 0.179 | 0.082 | 0.006 | **−0.103** |
+| 10–40 cm | recency | raw | 0.046 | 0.162 | 0.055 | −0.067 | −0.043 |
+| 0–10 cm | uniform | raw | 0.020 | 0.075 | 0.044 | −0.060 | 0.009 |
+| 40–100 cm | uniform | raw | 0.048 | 0.228 | 0.103 | 0.072 | −0.479 |
+| 0–100 cm | uniform | scale | 0.016 | 0.181 | 0.065 | −0.005 | −0.373 |
+| 0–100 cm | uniform | scale+offset | 0.092 | 0.292 | 0.358 | −0.293 | −0.236 |
+| 40–100 cm | recency | scale+offset | **0.095** | 0.326 | 0.299 | −0.091 | −0.362 |
+| Persistence (0–100 cm, reference) | | | | 0.719 | 0.876 | 0.690 | 0.660 |
+
+Full grid (24 combinations × 4 states × 4 years): `metrics_vci_tactics/`.
+
+Read:
+
+- **No tactic beats climatology in all four years.** VCI alone does not carry the year-to-year
+  level of soil moisture; every variant has at least one losing year.
+- **Label depth matters most for robustness.** The 10–40 cm layer gives the best pooled skill
+  without calibration (0.066 vs 0.044 now) and the smallest worst-year loss among the
+  label-only variants (2024: −0.10 vs −0.28). Texas 0.094 and California 0.055 pooled; Kansas
+  0.000 (it was −0.088 with the 0–100 cm label). The 40–100 cm layer has the highest r² (0.13)
+  but swings hardest in level, and 0–10 cm is too noisy for VCI (r² 0.03).
+- **The offset correction doubles pooled skill but is a bet on persistence of the annual
+  anomaly.** It helps strongly when one dry year follows another (2021, 2022: +0.10 to +0.29)
+  and hurts badly when the year flips (2023: after a very dry 2022 it shifted forecasts by
+  −0.58 and lost 0.3). It also relies on soil-moisture labels, which you may not have in
+  practice.
+- **Scale recalibration does nothing useful**: the fitted slopes are 0.77–1.23, so the model is
+  calibrated on its training years; its flatness only appears out of sample.
+- **Recency weighting is mixed**: it softens 2024 and hurts 2021–2022, no net gain.
+
+Recommendation, keeping VCI as the only input: switch the label to 10–40 cm, uniform
+weights, no recalibration, for the most reliable results. Use scale+offset only if recent
+soil-moisture labels are available and a bad year in exchange for better average skill is
+acceptable.
+
 ## Equivalence and runtimes
 
 `check_equivalence.run` on seed 42 of every variant: PASS (float32 and float64).
