@@ -72,14 +72,18 @@ def layer_labels(days):
     return out
 
 
-def fit_one_epoch(samples, weights, seed, name):
+def fit_one_epoch(samples, weights, seed, name, num_samples=None):
+    """One epoch of ``num_samples`` weighted draws (default: one per training sample)."""
     L.seed_everything(seed, workers=True)
     data = TensorDataset(
         torch.from_numpy(samples["x"]), torch.from_numpy(samples["y"]).unsqueeze(1)
     )
     generator = torch.Generator().manual_seed(seed)
     sampler = WeightedRandomSampler(
-        torch.from_numpy(weights), len(weights), replacement=True, generator=generator
+        torch.from_numpy(weights),
+        num_samples or len(weights),
+        replacement=True,
+        generator=generator,
     )
     model = D.RegularizedBiLSTM(1, D.HIDDEN, D.LR, WEIGHT_DECAY)
     trainer = L.Trainer(
