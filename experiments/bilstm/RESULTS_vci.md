@@ -369,7 +369,88 @@ Skill vs climatology, pooled 2021–2024 (r² in brackets):
   years) rather than the whole US. The US model already scores 0.096 there; a West-only model
   is the next run to try. Eastern cells should not get VCI-only forecasts.
 
+## West-only, East-only and VCI + land-surface temperature (TCI) (`vci_us.py`, `plot_tci.py`)
 
+Regions (`shared_split_us.WEST` / `EAST`): the 16 states whose kept cells average west of
+98°W (1,488 cells) and the 22 east of it (526 cells). Same setup as the US runs above (10–40 cm
+label, rolling origin 2021–2024, one epoch, seeds 42–44, same held-out blocks).
+
+**TCI** (`download_lst8.py`, `data_us.py --tci`): MODIS MOD11C2 8-day daytime land-surface
+temperature, cropped like the NDVI; per pixel and 8-day slot,
+TCI = 100 (LSTmax − LST) / (LSTmax − LSTmin) with 2000–2014 min/max (0 = hottest). Daily TCI is
+the latest composite complete by that day (start + 8 days), so it stays causal; it enters as
+a second channel built exactly like VCI (12 × 30-day block means). 1,135 composites; 0.32 % of
+cell values missing, no cell without data. Seven composites that start after a data gap (e.g.
+2016-02-28, after the Terra safe mode) are put in their nominal 8-day slot.
+
+Before training, the median per-cell correlation of the 30-day mean index with the 10–40 cm
+anomaly (2002–2014): West VCI +0.45 / TCI +0.41; East VCI **+0.04** / TCI **+0.42**;
+Kansas–Texas–California VCI +0.54 / TCI +0.61.
+
+Skill vs climatology, pooled 2021–2024, each model scored on its own states (r² in brackets):
+
+| Model | VCI only | VCI + coordinates | VCI + TCI |
+|---|---|---|---|
+| US (38 states) | 0.035 (0.062) | 0.007 | **0.128** (0.089) |
+| West (16 states) | 0.113 (0.097) | 0.071 | **0.156** (0.139) |
+| East (22 states) | −0.171 (0.056) | – | **−0.022** (0.086) |
+| Kansas + Texas + California | 0.065 (0.070) | 0.020 (earlier run) | **0.127** (0.091) |
+| Unseen blocks: US | 0.006 | −0.012 | **0.103** |
+| Unseen blocks: West | 0.082 | 0.029 | **0.193** |
+| Unseen blocks: East | −0.131 | – | **−0.016** |
+| Unseen blocks: Kansas + Texas + California | 0.012 | – | **0.207** |
+
+Per state (all cells):
+
+| | 3 states, VCI | 3 states, VCI + TCI | West, VCI | West, VCI + TCI | US, VCI | US, VCI + TCI |
+|---|---|---|---|---|---|---|
+| Kansas | −0.006 | **0.108** | 0.056 | 0.080 | −0.014 | 0.057 |
+| Texas | 0.090 | 0.015 | **0.123** | 0.104 | 0.086 | 0.121 |
+| California | 0.066 | **0.439** | 0.090 | 0.416 | 0.108 | 0.419 |
+| West states pooled | – | – | 0.113 | 0.156 | 0.096 | **0.183** |
+| KS + TX + CA pooled | 0.065 | 0.127 | 0.102 | 0.167 | 0.070 | **0.173** |
+| Unseen: Kansas | −0.335 | −0.217 | −0.244 | −0.165 | −0.347 | −0.147 |
+
+![VCI vs VCI + TCI](figures_vci_us/tci_vs_vci.png)
+
+![West-only models](figures_vci_us/west_only.png)
+
+![US VCI + TCI map](figures_vci_us/us_tci_map.png)
+
+- **TCI is the largest improvement of the project.** It raises every region, on all cells and
+  on unseen blocks: US 0.035 → 0.128, West 0.113 → 0.156, three states 0.065 → 0.127, and
+  unseen blocks even more (US 0.006 → 0.103, three states 0.012 → 0.207). 28 of 38 states
+  improve in the US model.
+- **It mostly fixes the level.** In the West the US model's mean offset penalty drops from
+  0.42 to 0.24 while r² rises 0.084 → 0.119: a hot surface flags dry soil that is still green,
+  which VCI alone misses.
+- **California gains most** (0.07–0.11 → 0.42–0.44; 2023 −0.38 → +0.31): its irrigated and
+  winter-wet cells keep green vegetation through soil drought, so VCI lags while LST does not.
+- **The East goes from clearly worse than climatology to about even** (−0.171 → −0.022);
+  TCI carries a signal there (correlation 0.42 vs 0.04) but not enough for useful forecasts,
+  and Tennessee, Georgia and Alabama get worse.
+- **Gains are concentrated in 2021–2022** (West: 0.13 → 0.33 in 2021); 2024 does not improve
+  (West −0.06 to −0.01), so the 2024 offset (green vegetation, dry soil) is still unsolved.
+- **With TCI, East data helps the West again**: the US VCI + TCI model scores 0.183 on the
+  Western states vs 0.156 for the West-only VCI + TCI model (unseen blocks 0.191 vs 0.193).
+  Without TCI it was the reverse (West-only 0.113 vs US 0.096).
+- **Texas is the exception**: VCI + TCI does not beat VCI only there (best: West VCI 0.123;
+  US VCI + TCI 0.121; three-state VCI + TCI 0.015).
+- **Coordinates still do not help on average** (West 0.113 → 0.071), except California and
+  unseen Kansas blocks.
+- **Recommendation**: one US model with VCI + TCI (best on the Western and three original
+  states, and level with the West-only model on unseen Western blocks). Issue forecasts only
+  where it beats climatology in the train years, which currently excludes most of the
+  Southeast.
+
+Equivalence: all 32 VCI + TCI models and 22 of 24 West/East models pass. The two East VCI-only
+models (2021, 2023) fail only the float32 200-step stress case of `check_equivalence.py`
+(max |diff| 1.8e-5 and 1.2e-4 against atol 1e-6); the 12-step case the model uses matches to
+1.5e-7 and float64 matches to 1e-14, so it is float32 rounding over long sequences, not a
+mismatch. Runtimes on 4 CPUs: West/East jobs 1 h 47 min, VCI + TCI jobs 1 h 47 min (a US
+VCI + TCI model takes 8–10 minutes on one thread).
+
+## Equivalence and runtimes
 
 `check_equivalence.run` on seed 42 of every variant: PASS (float32 and float64).
 MOD13C2 download 4.0 min; `data_vci.py` 3.1 min; training all 18 models (3 variants ×
