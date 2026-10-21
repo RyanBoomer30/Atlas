@@ -11,6 +11,7 @@ REPO = Path(__file__).resolve().parents[2]
 DATA = REPO / ".atlas/data"
 FLDAS_US_DIR = DATA / "fldas_us"
 MOD13C1_US_DIR = DATA / "mod13c1_us"
+MOD11C2_US_DIR = DATA / "mod11c2_us"
 OUT_US_DIR = DATA / "vci_us"
 
 # W, S, E, N on 0.5 deg cell edges, so no cell is cut by the box.
@@ -40,3 +41,16 @@ EXCLUDED_FIPS = ("02", "15", "72")  # Alaska, Hawaii, Puerto Rico
 THREE_STATES = ("kansas", "texas", "california")
 # Great Plains states: the two already used plus the four between them and Canada.
 PLAINS = ("north_dakota", "south_dakota", "nebraska", "kansas", "oklahoma", "texas")
+# West / East of 98 W, by the mean longitude of each state's kept cells (RESULTS_vci.md,
+# "More states"): where VCI-only skill is positive vs negative.
+WEST = (
+    "california", "oregon", "washington", "nevada", "idaho", "utah", "arizona", "montana",
+    "wyoming", "new_mexico", "colorado", "north_dakota", "south_dakota", "nebraska", "texas",
+    "kansas",
+)  # fmt: skip
+EAST = (
+    "oklahoma", "minnesota", "iowa", "missouri", "louisiana", "arkansas", "mississippi",
+    "wisconsin", "tennessee", "illinois", "alabama", "indiana", "kentucky", "michigan",
+    "georgia", "ohio", "florida", "north_carolina", "new_york", "pennsylvania", "maryland",
+    "delaware",
+)  # fmt: skip

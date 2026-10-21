@@ -1,10 +1,13 @@
-"""VCI-only models on more states: three states, the six Plains states, or the contiguous US.
+"""VCI models on more states: three states, six Plains states, West / East of 98 W, or the US.
 
 Setup as vci_tactics.py ("uniform"): daily VCI is the only input, 10-40 cm soil-moisture
 label, raw output, rolling origin 2021-2024 (train 2001 .. year before), one epoch over every
 training sample, seeds 42-44 (ensemble = seed mean). States are drawn in proportion to their
 effective number of independent cells. All three regions use the contiguous-US build
 (data_us.py), so they differ only in which states they train on.
+
+--inputs tci adds daily TCI (data_us.py --tci) as a second channel, built exactly like the VCI
+channel (12 x 30-day block means, same scaling).
 
 --inputs coords appends standardized latitude and longitude (vci_coords.add_coordinates,
 statistics over the region's cells) to the VCI input.
@@ -29,7 +32,7 @@ import train_v2_delta as D
 from data_us import load
 from data_vci_daily import first_anchor, samples_for
 from data_vci_daily import load_daily as load_three_state
-from shared_split_us import OUT_US_DIR, PLAINS, THREE_STATES
+from shared_split_us import EAST, OUT_US_DIR, PLAINS, THREE_STATES, WEST
 from shared_split_v2 import BLOCK_HOLDOUT_FRACTION, SEED, block_of
 from train_v2 import equivalence
 from train_v2 import spatial_holdout as holdout_blocks
@@ -41,12 +44,12 @@ from vci_tactics import SEEDS, TEST_YEARS, fit_one_epoch, predict, select
 OUT = D.OUT
 METRICS = OUT / "metrics_vci_us"
 LABEL = "sm_10_40"
-REGIONS = {"three": THREE_STATES, "plains": PLAINS, "us": None}
+REGIONS = {"three": THREE_STATES, "plains": PLAINS, "west": WEST, "east": EAST, "us": None}
 
 
 def cells_of(daily, states):
     keep = np.isin(daily["names"][daily["state"]], states)
-    cell_keys = ("vci", "sm", "state", "lon", "lat")
+    cell_keys = ("vci", "tci", "sm", "state", "lon", "lat")
     return {k: (v[keep] if k in cell_keys else v) for k, v in daily.items()}
 
 
@@ -101,7 +104,7 @@ def in_cells(samples, cells):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--region", choices=list(REGIONS), required=True)
-    parser.add_argument("--inputs", choices=["vci", "coords"], default="vci")
+    parser.add_argument("--inputs", choices=["vci", "coords", "tci"], default="vci")
     parser.add_argument("--spatial", action="store_true")
     parser.add_argument("--years", type=int, nargs="+", default=list(TEST_YEARS))
     parser.add_argument("--threads", type=int, default=1)
@@ -115,11 +118,19 @@ def main():
     held = held_cells(daily) if args.spatial else set()
     region = daily if REGIONS[args.region] is None else cells_of(daily, REGIONS[args.region])
     days = pd.DatetimeIndex(region["days"])
-    anchors = np.arange(first_anchor(region), len(days))
+    first = first_anchor(region)
+    if args.inputs == "tci":
+        first = max(first, first_anchor(region | {"vci": region["tci"]}))
+    anchors = np.arange(first, len(days))
+    test_anchors = anchors[days[anchors] >= pd.Timestamp(f"{min(args.years) - 1}-12-01")]
     coarse = samples_for(region, anchors[::TRAIN_STRIDE])
-    fine = samples_for(
-        region, anchors[days[anchors] >= pd.Timestamp(f"{min(args.years) - 1}-12-01")]
-    )
+    fine = samples_for(region, test_anchors)
+    if args.inputs == "tci":
+        as_vci = region | {"vci": region["tci"]}
+        for samples, idx in ((coarse, anchors[::TRAIN_STRIDE]), (fine, test_anchors)):
+            tci_x = samples_for(as_vci, idx)["x"]
+            samples["x"] = np.concatenate([samples["x"], tci_x], axis=2)
+            del tci_x
 
     if args.inputs == "coords":
         lat_stats = (float(region["lat"].mean()), float(region["lat"].std()))
@@ -139,7 +150,7 @@ def main():
     )
 
     run = "spatial_unseen" if args.spatial else "test"
-    tag = f"{args.region}_{'coords_' if args.inputs == 'coords' else ''}"
+    tag = f"{args.region}_{'' if args.inputs == 'vci' else args.inputs + '_'}"
     tag += "spatial" if args.spatial else "main"
     if args.years != list(TEST_YEARS):
         tag += "_" + "-".join(map(str, args.years))

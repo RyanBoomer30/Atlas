@@ -11,9 +11,17 @@ a border cell), and only the variables the VCI setup uses are pulled (soil layer
 so the "FLDAS present" rule checks those four.
 
     python data_us.py    # writes .atlas/data/vci_us/{daily_vci.npz, labels.npz, cells.csv, masks.json}
+    python data_us.py --tci   # adds daily_tci.npz (needs daily_vci.npz and download_lst8.py)
+
+TCI (temperature condition index) mirrors VCI for MOD11C2 8-day daytime land-surface
+temperature: 100 (LSTmax - LST) / (LSTmax - LSTmin) per pixel and 8-day slot, min/max over
+train years 2000-2014, so 0 is the hottest (most stressed) and 100 the coolest. Daily TCI is
+the latest composite complete by that day (an 8-day composite starting on s is usable on s + 8).
 """
 
+import argparse
 import json
+import warnings
 from itertools import pairwise
 
 import numpy as np
@@ -30,7 +38,7 @@ from data_v2 import (
     longest_stuck_run,
     snap,
 )
-from data_vci import SM_LAYERS, SM_STATS_YEARS, cell_vci
+from data_vci import SM_LAYERS, SM_STATS_YEARS, VCI_CLIP, VCI_STATS_YEARS, cell_vci
 from data_vci_daily import (
     AVAILABLE_AFTER,
     FIRST_DAY,
@@ -46,6 +54,7 @@ from shared_split_us import (
     EXCLUDED_FIPS,
     FLDAS_US_DIR,
     FLDAS_US_VARIABLES,
+    MOD11C2_US_DIR,
     MOD13C1_US_DIR,
     OUT_US_DIR,
 )
@@ -60,6 +69,10 @@ from shared_split_v2 import (
 
 DAILY_US = OUT_US_DIR / "daily_vci.npz"
 LABELS_US = OUT_US_DIR / "labels.npz"
+TCI_US = OUT_US_DIR / "daily_tci.npz"
+LST_GOOD_QC = (0, 1)  # MOD11C2 QC bits 0-1: LST produced, good / other quality
+LST_AVAILABLE_AFTER = 8
+MIN_LST_RANGE = 2.0  # K: pixels whose train-year LST barely moves give no usable TCI
 CELLS_US = OUT_US_DIR / "cells.csv"
 MASKS_US = OUT_US_DIR / "masks.json"
 LAYERS = {
@@ -259,13 +272,84 @@ def build():
     print(f"{len(cells)} cells in {len(per_state)} states, {len(table_c)} composites", flush=True)
 
 
+def lst_composites():
+    rows = []
+    for path in sorted(MOD11C2_US_DIR.glob("*.npz")):
+        start = pd.Timestamp(path.stem.split("_")[1])
+        rows.append(
+            {
+                "start": start,
+                "doy": start.dayofyear,
+                "available": start + pd.Timedelta(days=LST_AVAILABLE_AFTER),
+                "path": path,
+            }
+        )
+    return pd.DataFrame(rows).sort_values("available").reset_index(drop=True)
+
+
+def composite_tci(table):
+    """TCI per pixel for every composite (computed in place over one LST stack)."""
+    first = np.load(table.path[0])["lst"]
+    stack = np.full((len(table), *first.shape), np.nan, np.float32)
+    for i, path in enumerate(table.path):
+        with np.load(path) as f:
+            lst, qc = f["lst"], f["qc"]
+        good = np.isin(qc & 3, LST_GOOD_QC) & (lst > 0)
+        stack[i] = np.where(good, lst * 0.02, np.nan)
+    years = table.start.dt.year.to_numpy()
+    in_stats = (years >= VCI_STATS_YEARS[0]) & (years <= VCI_STATS_YEARS[1])
+    for _doy, group in table.groupby("doy"):
+        idx = group.index.to_numpy()
+        ref = stack[idx[in_stats[idx]]]
+        with warnings.catch_warnings():  # ocean / never-clear pixels are all-NaN
+            warnings.simplefilter("ignore", RuntimeWarning)
+            lo, hi = np.nanmin(ref, axis=0), np.nanmax(ref, axis=0)
+        span = hi - lo
+        usable = np.isfinite(span) & (span >= MIN_LST_RANGE)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            t = 100 * (hi - stack[idx]) / np.where(usable, span, np.nan)
+        stack[idx] = np.clip(t, *VCI_CLIP)
+    return stack
+
+
+def build_tci():
+    with np.load(DAILY_US) as f:
+        lon, lat, days = f["lon"], f["lat"], pd.DatetimeIndex(f["days"])
+    table = lst_composites()
+    tci_px = composite_tci(table)
+    grid_lat = 90 - 0.025 - 0.05 * np.arange(CMG_ROWS[0], CMG_ROWS[1] + 1)
+    grid_lon = -180 + 0.025 + 0.05 * np.arange(CMG_COLS[0], CMG_COLS[1] + 1)
+    cells = [(round(float(a), 2), round(float(b), 2)) for a, b in zip(lon, lat, strict=True)]
+    values, counts = cell_vci(tci_px, grid_lat, grid_lon, cells)
+    del tci_px
+    daily = daily_from_composites(values, table, days)
+    np.savez(TCI_US, tci=daily, median_valid_pixels=np.median(counts, axis=1))
+    print(
+        f"TCI: {len(table)} composites, {len(cells)} cells, composite cell values missing "
+        f"{np.isnan(values).mean():.2%}, cells never valid {int(np.isnan(values).all(1).sum())}",
+        flush=True,
+    )
+
+
 def load(label="sm_10_40"):
-    """Daily US data with the chosen soil-moisture label as ``sm`` (built on first use)."""
+    """Daily US data with the chosen soil-moisture label as ``sm`` (built on first use).
+
+    Adds daily ``tci`` when data_us.py --tci has been run.
+    """
     if not DAILY_US.exists():
         build()
     with np.load(DAILY_US) as f, np.load(LABELS_US) as labels:
-        return {k: f[k] for k in f.files} | {"sm": labels[label]}
+        out = {k: f[k] for k in f.files} | {"sm": labels[label]}
+    if TCI_US.exists():
+        with np.load(TCI_US) as f:
+            out["tci"] = f["tci"]
+    return out
 
 
 if __name__ == "__main__":
-    build()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--tci", action="store_true", help="only build daily TCI")
+    if parser.parse_args().tci:
+        build_tci()
+    else:
+        build()
