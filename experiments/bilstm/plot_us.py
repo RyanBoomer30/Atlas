@@ -125,7 +125,8 @@ def bars(table):
 
 def us_map(table):
     polygons = us_states()
-    fig, axes = plt.subplots(2, 2, figsize=(14, 9.4), facecolor=SURFACE)
+    fig, axes = plt.subplots(2, 2, figsize=(13, 6.6), facecolor=SURFACE)
+    fig.subplots_adjust(left=0.01, right=0.88, top=0.94, bottom=0.06, wspace=0.03, hspace=0.12)
     norm = Normalize(-0.4, 0.4)
     panels = [
         (model, run, f"{inputs}, {title}")
@@ -139,12 +140,20 @@ def us_map(table):
             continue
         for state, rings in polygons.items():
             value = sub.skill.get(state, np.nan)
-            face = "#e6e5e0" if np.isnan(value) else SKILL_MAP(norm(value))
             for ring in rings:
-                ax.add_patch(PathPatch(ring, facecolor=face, edgecolor=SURFACE, linewidth=0.8))
+                if np.isnan(value):  # no cells to score: hatched, not a colour on the scale
+                    ax.add_patch(
+                        PathPatch(
+                            ring, facecolor=SURFACE, edgecolor="#c9c7c0", hatch="////", lw=0.5
+                        )
+                    )
+                else:
+                    ax.add_patch(
+                        PathPatch(ring, facecolor=SKILL_MAP(norm(value)), edgecolor=SURFACE, lw=0.8)
+                    )
         ax.set_xlim(-125, -66.5)
         ax.set_ylim(24.5, 49.5)
-        ax.set_aspect(1.25)
+        ax.set_aspect(1.25, adjustable="box")
         ax.axis("off")
         ax.set_facecolor(SURFACE)
         overall = sub.loc["all trained states"]
@@ -163,7 +172,7 @@ def us_map(table):
     fig.text(
         0.01,
         0.02,
-        "Gray: no kept cells (or no held-out block) in the state.",
+        "Hatched: no kept cells (or no held-out block) in the state.",
         color=INK_2,
         fontsize=8,
     )

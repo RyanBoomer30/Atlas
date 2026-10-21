@@ -292,7 +292,84 @@ Skill vs climatology, pooled 2021–2024 (r² in brackets):
   most robust overall. More regions of the same kind (more Plains states), rather than
   splitting, is the more promising way to add data.
 
-## Equivalence and runtimes
+## More states: 6 Plains states and the contiguous US (`vci_us.py`)
+
+One FLDAS pull and one MOD13C1/MYD13C1 crop for the whole contiguous-US box
+(`download_fldas_us.py`, `download_vci16.py --box us`), split into states by the Census
+borders, with the same cell rules as before (`data_us.py`, `shared_split_us.py`). FLDAS was
+pulled with only the variables the VCI setup uses (three soil layers and rain).
+
+| Rule | Removed | Kept |
+|---|---|---|
+| 0.5° cells with any valid FLDAS land cell | | 4,255 |
+| SPEI-12 present | 2 | 4,253 |
+| Center inside a contiguous-US state | 966 | 3,287 |
+| FLDAS present every month | 0 | 3,287 |
+| Not hyper-arid | 27 | 3,260 |
+| Stable SPEI-12 | 0 | 3,260 |
+| ≥ 30 % grassland/cropland (MCD12Q1 2010) | 1,246 | **2,014** |
+
+2,014 cells in 38 states (Texas 209, Montana 159, Wyoming 112, Colorado 105, New Mexico 97,
+...). The other 11 states (mostly forested New England and the Appalachians) have no cell that
+passes the land-cover rule. For Kansas, Texas and California the US build has the same 359
+cells with identical daily VCI, and 10–40 cm labels that match to correlation 0.999996
+(the old per-state boxes cut a few border cells slightly).
+
+Models: VCI only (and VCI + latitude/longitude for the US), 10–40 cm label, rolling origin
+2021–2024, one epoch over every training sample, seeds 42–44, states drawn in proportion to
+their effective independent cells. All four models use this same build, so the three-state
+model is retrained here as the baseline. Unseen blocks: the 8 blocks the three-state runs held
+out, plus 20 % of the blocks with no three-state cell. Equivalence check PASS for every model.
+A US model takes about 5.5 minutes on one CPU thread (2,014 cells; 2.6 M training draws for
+2024); all 20 jobs took 76 minutes on 4 CPUs.
+
+Skill vs climatology, pooled 2021–2024 (r² in brackets):
+
+| | 3 states, VCI | 6 Plains states, VCI | US, VCI | US, VCI + coordinates |
+|---|---|---|---|---|
+| Kansas | −0.006 (0.074) | −0.096 (0.041) | −0.014 (0.030) | **0.047** (0.040) |
+| Texas | **0.090** (0.093) | **0.091** (0.100) | 0.086 (0.078) | −0.079 (0.078) |
+| California | 0.066 (0.043) | – | 0.108 (0.021) | **0.182** (0.037) |
+| KS + TX + CA pooled | 0.065 | – | **0.070** | 0.004 |
+| 6 Plains states pooled | – | 0.037 | **0.056** | 0.008 |
+| All 38 states pooled | – | – | **0.035** | 0.007 |
+| West of 98°W (16 states) | – | – | **0.096** | 0.077 |
+| East of 98°W (22 states) | – | – | **−0.155** | −0.214 |
+| Unseen: Kansas | −0.335 | −0.360 | −0.347 | **0.078** |
+| Unseen: Texas | **0.138** | 0.104 | 0.077 | −0.114 |
+| Unseen: California | −0.055 | – | **0.020** | −0.023 |
+| Unseen: KS + TX + CA pooled | 0.012 | 0.032 | 0.015 | −0.058 |
+| Unseen: all 38 states pooled | – | – | **0.006** | −0.012 |
+
+![More training states](figures_vci_us/more_states.png)
+
+![US model skill per state](figures_vci_us/us_skill_map.png)
+
+- **One US model is at least as good as the three-state model on the original states**
+  (pooled 0.070 vs 0.065), mostly from California (0.066 → 0.108); Kansas and Texas are
+  unchanged within noise. Its worst year is also less bad (Kansas −0.45 vs −0.69,
+  California −0.14 vs −0.38). Timing (r²) is a little lower, so the gain is in the level.
+- **The six-state Plains model did not help.** Kansas got worse (−0.006 → −0.096), Texas
+  stayed the same, and over the six Plains states it is below the US model (0.037 vs 0.056).
+  The US model's extra variety again helped more than more of the same climate.
+- **VCI works in the West and fails in the East.** West of 98°W the US model scores 0.096;
+  east of it −0.155 (Corn Belt and the Southeast: Illinois −0.29, Wisconsin −0.27,
+  Pennsylvania −0.34). There, plants are rarely water-limited and irrigation and crop calendars
+  drive greenness, so VCI says little about soil moisture. Eastern cells are 26 % of the test
+  samples, which pulls the US-wide score down to 0.035.
+- **Coordinates help the arid West but hurt elsewhere.** With coordinates, California
+  (0.182), Arizona, New Mexico and unseen Kansas blocks (+0.078, the only model that fixes
+  them) improve, but Texas (−0.079) and the East get worse; overall 0.035 → 0.007. Same
+  pattern as in the three-state runs: location lets the model memorize local offsets, and they
+  do not carry to new years everywhere.
+- **Unseen blocks are still the hard case**: −0.35 in Kansas without coordinates for every
+  region choice. More training states did not fix spatial generalization.
+- **Recommendation**: train one shared VCI-only model, but on the water-limited West (the
+  16 states west of 98°W, or the cells where VCI and soil moisture are correlated in the train
+  years) rather than the whole US. The US model already scores 0.096 there; a West-only model
+  is the next run to try. Eastern cells should not get VCI-only forecasts.
+
+
 
 `check_equivalence.run` on seed 42 of every variant: PASS (float32 and float64).
 MOD13C2 download 4.0 min; `data_vci.py` 3.1 min; training all 18 models (3 variants ×
