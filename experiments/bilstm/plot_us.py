@@ -41,10 +41,12 @@ def label(state):
 
 
 def load():
-    paths = [p for p in sorted(METRICS.glob("*.csv")) if p.stem.split("_")[0] in MODELS]
+    """Every per-year result file, with model = region (+ inputs when not VCI only)."""
+    regions = ("three", "plains", "west", "east", "us")
+    paths = [p for p in sorted(METRICS.glob("*.csv")) if p.stem.split("_")[0] in regions]
     paths = [p for p in paths if "effective" not in p.stem]
     data = pd.concat([pd.read_csv(p) for p in paths], ignore_index=True)
-    return data.assign(model=data.region + np.where(data.inputs == "coords", "+coords", ""))
+    return data.assign(model=data.region + np.where(data.inputs == "vci", "", "+" + data.inputs))
 
 
 def pooled(frame):
@@ -182,7 +184,8 @@ def us_map(table):
 
 def main():
     FIG.mkdir(exist_ok=True)
-    table = summary(load())
+    data = load()
+    table = summary(data[data.model.isin(list(MODELS))])
     table.to_csv(METRICS / "comparison.csv", index=False)
     bars(table)
     if (table.model == "us").any():
