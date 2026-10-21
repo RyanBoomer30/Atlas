@@ -9,6 +9,10 @@ effective number of independent cells. All three regions use the contiguous-US b
 --inputs tci adds daily TCI (data_us.py --tci) as a second channel, built exactly like the VCI
 channel (12 x 30-day block means, same scaling).
 
+--time adds, per 30-day block, the day of year of the block's middle (sin and cos) and the
+mean age in days of the data behind it (data_us.capture_age / 30: VCI, and TCI with --inputs
+tci), so the model knows the season and how fresh each block is. The calendar year is left out.
+
 --inputs coords appends standardized latitude and longitude (vci_coords.add_coordinates,
 statistics over the region's cells) to the VCI input.
 
@@ -29,8 +33,8 @@ import numpy as np
 import pandas as pd
 import torch
 import train_v2_delta as D
-from data_us import load
-from data_vci_daily import first_anchor, samples_for
+from data_us import AVAILABLE_AFTER, LST_AVAILABLE_AFTER, capture_age, load
+from data_vci_daily import BLOCK_DAYS, BLOCKS, LEAD_DAYS, first_anchor, prefix_sums, samples_for
 from data_vci_daily import load_daily as load_three_state
 from shared_split_us import EAST, OUT_US_DIR, PLAINS, THREE_STATES, WEST
 from shared_split_v2 import BLOCK_HOLDOUT_FRACTION, SEED, block_of
@@ -101,10 +105,31 @@ def in_cells(samples, cells):
     return np.array([p in cells for p in pairs])
 
 
+def time_channels(region, idx, ages):
+    """Day-of-year sin/cos and mean data age / 30 per block, in samples_for's sample order."""
+    days = pd.DatetimeIndex(region["days"])
+    idx = np.array([i for i in idx if i + LEAD_DAYS < len(days)])
+    ends = idx[:, None] - BLOCK_DAYS * np.arange(BLOCKS - 1, -1, -1)[None, :]
+    doy = days[(ends - BLOCK_DAYS // 2).ravel()].dayofyear.to_numpy().reshape(ends.shape)
+    angle = (2 * np.pi * (doy - 1) / 365.25).astype(np.float32)
+    n = len(region["state"])
+    channels = [np.repeat(np.stack([np.sin(angle), np.cos(angle)], axis=2), n, axis=0)]
+    for age in ages:
+        total, count = prefix_sums(age)
+        blocks = []
+        for e in ends:
+            with np.errstate(invalid="ignore", divide="ignore"):
+                n_days = count[:, e + 1] - count[:, e + 1 - BLOCK_DAYS]
+                blocks.append((total[:, e + 1] - total[:, e + 1 - BLOCK_DAYS]) / n_days / 30.0)
+        channels.append(np.stack(blocks).reshape(-1, BLOCKS, 1).astype(np.float32))
+    return np.concatenate(channels, axis=2)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--region", choices=list(REGIONS), required=True)
     parser.add_argument("--inputs", choices=["vci", "coords", "tci"], default="vci")
+    parser.add_argument("--time", action="store_true", help="add season and data-age inputs")
     parser.add_argument("--spatial", action="store_true")
     parser.add_argument("--years", type=int, nargs="+", default=list(TEST_YEARS))
     parser.add_argument("--threads", type=int, default=1)
@@ -132,6 +157,14 @@ def main():
             samples["x"] = np.concatenate([samples["x"], tci_x], axis=2)
             del tci_x
 
+    if args.time:
+        ages = [capture_age(region["vci"], AVAILABLE_AFTER)]
+        if args.inputs == "tci":
+            ages.append(capture_age(region["tci"], LST_AVAILABLE_AFTER))
+        for samples, idx in ((coarse, anchors[::TRAIN_STRIDE]), (fine, test_anchors)):
+            samples["x"] = np.concatenate([samples["x"], time_channels(region, idx, ages)], axis=2)
+        del ages
+
     if args.inputs == "coords":
         lat_stats = (float(region["lat"].mean()), float(region["lat"].std()))
         lon_stats = (float(region["lon"].mean()), float(region["lon"].std()))
@@ -150,7 +183,9 @@ def main():
     )
 
     run = "spatial_unseen" if args.spatial else "test"
+    inputs = args.inputs + ("+time" if args.time else "")
     tag = f"{args.region}_{'' if args.inputs == 'vci' else args.inputs + '_'}"
+    tag += "time_" if args.time else ""
     tag += "spatial" if args.spatial else "main"
     if args.years != list(TEST_YEARS):
         tag += "_" + "-".join(map(str, args.years))
@@ -185,7 +220,7 @@ def main():
             rows.append(
                 {
                     "region": args.region,
-                    "inputs": args.inputs,
+                    "inputs": inputs,
                     "run": run,
                     "year": year,
                     "state": names[i],

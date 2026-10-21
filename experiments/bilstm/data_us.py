@@ -350,6 +350,22 @@ def build_tci():
     )
 
 
+def capture_age(daily, lag):
+    """Days from the start of the composite behind each day's value to that day.
+
+    A daily series changes value on the day a new composite becomes usable (``lag`` days after
+    it starts), and keeps it while later composites are missing for the cell, so the age is the
+    days since the last change plus ``lag``. NaN where the series is NaN.
+    """
+    t = np.arange(daily.shape[1])
+    same = (daily[:, 1:] == daily[:, :-1]) | (np.isnan(daily[:, 1:]) & np.isnan(daily[:, :-1]))
+    changed = np.concatenate([np.ones((len(daily), 1), bool), ~same], axis=1)
+    last = np.maximum.accumulate(np.where(changed, t, 0), axis=1)
+    age = (t - last + lag).astype(np.float32)
+    age[np.isnan(daily)] = np.nan
+    return age
+
+
 def load(label="sm_10_40"):
     """Daily US data with the chosen soil-moisture label as ``sm`` (built on first use).
 
