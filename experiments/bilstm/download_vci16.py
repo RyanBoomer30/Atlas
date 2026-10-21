@@ -6,6 +6,7 @@ columns as download_vci.py) and deleted. Terra and Aqua composites are offset by
 so together they give a new NDVI composite about every 8 days.
 
     python download_vci16.py            # 2000-02 .. 2024-12, needs EARTHDATA_TOKEN
+    python download_vci16.py --box us   # contiguous-US box (shared_split_us.py)
 """
 
 import argparse
@@ -19,6 +20,7 @@ import httpx
 import numpy as np
 from download_vci import COLS, ROWS
 from pyhdf.SD import SD, SDC
+from shared_split_us import CMG_COLS, CMG_ROWS, MOD13C1_US_DIR
 
 REPO = Path(__file__).resolve().parents[2]
 OUT_DIR = REPO / ".atlas/data/mod13c1"
@@ -27,6 +29,7 @@ PRODUCTS = ("MOD13C1", "MYD13C1")
 NDVI = "CMG 0.05 Deg 16 days NDVI"
 RELIABILITY = "CMG 0.05 Deg 16 days pixel reliability"
 WORKERS = 6
+BOXES = {"v2": (ROWS, COLS, OUT_DIR), "us": (CMG_ROWS, CMG_COLS, MOD13C1_US_DIR)}
 
 
 def granules(short_name, start, end):
@@ -61,7 +64,7 @@ def granules(short_name, start, end):
             page += 1
 
 
-def fetch(short_name, day, url, out_dir, scratch, headers):
+def fetch(short_name, day, url, out_dir, scratch, headers, rows=ROWS, cols=COLS):
     path = out_dir / f"{short_name}_{day}.npz"
     if path.exists():
         return path.name, "cached", 0
@@ -83,8 +86,8 @@ def fetch(short_name, day, url, out_dir, scratch, headers):
             time.sleep(5 * (attempt + 1))
     try:
         sd = SD(str(tmp), SDC.READ)
-        r0, r1 = ROWS[0], ROWS[1] + 1
-        c0, c1 = COLS[0], COLS[1] + 1
+        r0, r1 = rows[0], rows[1] + 1
+        c0, c1 = cols[0], cols[1] + 1
         ndvi = sd.select(NDVI)[r0:r1, c0:c1]
         reliability = sd.select(RELIABILITY)[r0:r1, c0:c1]
         sd.end()
@@ -99,8 +102,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--start", default="2000-02-01")
     parser.add_argument("--end", default="2024-12-31")
-    parser.add_argument("--out", type=Path, default=OUT_DIR)
+    parser.add_argument("--box", choices=list(BOXES), default="v2")
+    parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
+    rows, cols, default_out = BOXES[args.box]
+    args.out = args.out or default_out
     args.out.mkdir(parents=True, exist_ok=True)
     jobs = [(sn, day, url) for sn in PRODUCTS for day, url in granules(sn, args.start, args.end)]
     print(
@@ -115,7 +121,7 @@ def main():
         ThreadPoolExecutor(WORKERS) as pool,
     ):
         futures = [
-            pool.submit(fetch, sn, day, url, args.out, Path(scratch), headers)
+            pool.submit(fetch, sn, day, url, args.out, Path(scratch), headers, rows, cols)
             for sn, day, url in jobs
         ]
         for done, future in enumerate(as_completed(futures), start=1):
