@@ -6,12 +6,16 @@ training sample, seeds 42-44 (ensemble = seed mean). States are drawn in proport
 effective number of independent cells. All three regions use the contiguous-US build
 (data_us.py), so they differ only in which states they train on.
 
+--inputs coords appends standardized latitude and longitude (vci_coords.add_coordinates,
+statistics over the region's cells) to the VCI input.
+
 --spatial trains without held-out 2x2 deg blocks and scores only those: the 8 blocks the
 three-state runs held out (chosen by train_v2.spatial_holdout over the three-state cells),
 plus 20 % of the other states' blocks (same rule and seed).
 
     python vci_us.py --region plains
     python vci_us.py --region us --years 2021 --spatial
+    python vci_us.py --region us --inputs coords
     python vci_us.py --region us --time-only      # time 3 % of one epoch, print the estimate
 """
 
@@ -31,6 +35,7 @@ from train_v2 import equivalence
 from train_v2 import spatial_holdout as holdout_blocks
 from train_vci_daily import TRAIN_STRIDE
 from train_vci_daily_recent import decompose, window_period
+from vci_coords import add_coordinates
 from vci_tactics import SEEDS, TEST_YEARS, fit_one_epoch, predict, select
 
 OUT = D.OUT
@@ -96,6 +101,7 @@ def in_cells(samples, cells):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--region", choices=list(REGIONS), required=True)
+    parser.add_argument("--inputs", choices=["vci", "coords"], default="vci")
     parser.add_argument("--spatial", action="store_true")
     parser.add_argument("--years", type=int, nargs="+", default=list(TEST_YEARS))
     parser.add_argument("--threads", type=int, default=1)
@@ -115,6 +121,12 @@ def main():
         region, anchors[days[anchors] >= pd.Timestamp(f"{min(args.years) - 1}-12-01")]
     )
 
+    if args.inputs == "coords":
+        lat_stats = (float(region["lat"].mean()), float(region["lat"].std()))
+        lon_stats = (float(region["lon"].mean()), float(region["lon"].std()))
+        coarse = add_coordinates(coarse, lat_stats, lon_stats)
+        fine = add_coordinates(fine, lat_stats, lon_stats)
+
     base = window_period(coarse, {"t": ("2001-01-01", "2020-12-31")}) == "t"
     n_eff = effective_cells(select(coarse, base), names)
     shares = {s: n / sum(n_eff.values()) for s, n in n_eff.items()}
@@ -127,7 +139,8 @@ def main():
     )
 
     run = "spatial_unseen" if args.spatial else "test"
-    tag = f"{args.region}_{'spatial' if args.spatial else 'main'}"
+    tag = f"{args.region}_{'coords_' if args.inputs == 'coords' else ''}"
+    tag += "spatial" if args.spatial else "main"
     if args.years != list(TEST_YEARS):
         tag += "_" + "-".join(map(str, args.years))
     rows, equivalence_ok = [], None
@@ -143,10 +156,10 @@ def main():
         if args.time_only:
             draws = max(len(weights) // 33, 20000)
             t0 = time.time()
-            fit_one_epoch(tr, weights, SEEDS[0], f"us_timing_{args.region}", draws)
+            fit_one_epoch(tr, weights, SEEDS[0], f"us_timing_{args.region}_{args.inputs}", draws)
             secs = (time.time() - t0) * len(weights) / draws
             print(
-                f"TIMING {args.region} {year}: {len(weights)} training samples, "
+                f"TIMING {args.region} {args.inputs} {year}: {len(weights)} training samples, "
                 f"{secs / 60:.1f} min per one-epoch model on {args.threads} thread(s)",
                 flush=True,
             )
@@ -161,6 +174,7 @@ def main():
             rows.append(
                 {
                     "region": args.region,
+                    "inputs": args.inputs,
                     "run": run,
                     "year": year,
                     "state": names[i],

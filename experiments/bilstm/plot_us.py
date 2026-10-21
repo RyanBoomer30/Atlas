@@ -22,11 +22,13 @@ from train import INK, INK_2, SURFACE, style
 OUT = Path(__file__).parent
 FIG = OUT / "figures_vci_us"
 METRICS = OUT / "metrics_vci_us"
-# Ordinal blue ramp: more training states -> darker.
-REGIONS = {
-    "three": ("3 states (KS, TX, CA)", "#86b6ef"),
-    "plains": ("6 Plains states", "#3987e5"),
-    "us": ("contiguous US (49)", "#184f95"),
+# VCI-only models on an ordinal blue ramp (more training states -> darker); the US model
+# with coordinates in the next categorical hue.
+MODELS = {
+    "three": ("3 states (KS, TX, CA), VCI", "#86b6ef"),
+    "plains": ("6 Plains states, VCI", "#3987e5"),
+    "us": ("contiguous US, VCI", "#184f95"),
+    "us+coords": ("contiguous US, VCI + coordinates", "#eb6834"),
 }
 FOCUS = ["kansas", "texas", "california", "nebraska", "oklahoma", "south_dakota", "north_dakota"]
 SKILL_MAP = LinearSegmentedColormap.from_list(
@@ -39,9 +41,10 @@ def label(state):
 
 
 def load():
-    paths = [p for p in sorted(METRICS.glob("*.csv")) if p.stem.split("_")[0] in REGIONS]
+    paths = [p for p in sorted(METRICS.glob("*.csv")) if p.stem.split("_")[0] in MODELS]
     paths = [p for p in paths if "effective" not in p.stem]
-    return pd.concat([pd.read_csv(p) for p in paths], ignore_index=True)
+    data = pd.concat([pd.read_csv(p) for p in paths], ignore_index=True)
+    return data.assign(model=data.region + np.where(data.inputs == "coords", "+coords", ""))
 
 
 def pooled(frame):
@@ -58,12 +61,12 @@ def pooled(frame):
 
 
 def summary(data):
-    per_state = data.groupby(["region", "run", "state"]).apply(pooled, include_groups=False)
+    per_state = data.groupby(["model", "run", "state"]).apply(pooled, include_groups=False)
     groups = {"three states": THREE_STATES, "plains states": PLAINS, "all trained states": None}
     extra = []
     for name, states in groups.items():
         sub = data if states is None else data[data.state.isin(states)]
-        g = sub.groupby(["region", "run"]).apply(pooled, include_groups=False)
+        g = sub.groupby(["model", "run"]).apply(pooled, include_groups=False)
         extra.append(g.assign(state=name).set_index("state", append=True))
     return pd.concat([per_state, *extra]).reset_index()
 
@@ -71,18 +74,18 @@ def summary(data):
 def bars(table):
     groups = [*FOCUS, "three states", "plains states"]
     fig, axes = plt.subplots(2, 2, figsize=(14, 7.8), facecolor=SURFACE)
-    width = 0.27
+    width = 0.2
     for col, (run, title) in enumerate(
         (("test", "all cells"), ("spatial_unseen", "unseen 2x2° blocks"))
     ):
         for row, (metric, name) in enumerate((("skill", "skill vs climatology"), ("r2", "r²"))):
             ax = axes[row, col]
-            for j, (region, (_, color)) in enumerate(REGIONS.items()):
-                sub = table[(table.region == region) & (table.run == run)].set_index("state")
+            for j, (model, (_, color)) in enumerate(MODELS.items()):
+                sub = table[(table.model == model) & (table.run == run)].set_index("state")
                 for k, g in enumerate(groups):
-                    if g not in sub.index or (region == "three" and g == "plains states"):
+                    if g not in sub.index or (model == "three" and g == "plains states"):
                         continue
-                    v, x = sub.loc[g, metric], k + (j - 1) * width
+                    v, x = sub.loc[g, metric], k + (j - 1.5) * width
                     ax.bar(x, v, width - 0.03, color=color, edgecolor=SURFACE, linewidth=2)
                     ax.text(
                         x,
@@ -91,25 +94,25 @@ def bars(table):
                         ha="center",
                         va="bottom" if v >= 0 else "top",
                         color=INK_2,
-                        fontsize=6.5,
+                        fontsize=5.5,
                     )
             ax.axhline(0, color=INK_2, linewidth=1)
             ax.axvline(len(FOCUS) - 0.5, color=INK_2, linewidth=0.6, linestyle=":")
             ax.set_xticks(range(len(groups)))
             ax.set_xticklabels([label(g).replace(" ", "\n", 1) for g in groups], fontsize=8)
             style(ax, f"{title}: {name}", "", name if col == 0 else "")
-    handles = [plt.Rectangle((0, 0), 1, 1, color=c) for _, c in REGIONS.values()]
+    handles = [plt.Rectangle((0, 0), 1, 1, color=c) for _, c in MODELS.values()]
     fig.legend(
         handles,
-        [f"trained on {n}" for n, _ in REGIONS.values()],
+        [f"trained on {n}" for n, _ in MODELS.values()],
         frameon=False,
         labelcolor=INK,
         fontsize=9,
-        ncol=3,
+        ncol=2,
         loc="upper right",
     )
     fig.suptitle(
-        "VCI only, 10-40 cm soil moisture, pooled 2021-2024: more training states",
+        "10-40 cm soil moisture, pooled 2021-2024: more training states",
         x=0.01,
         ha="left",
         color=INK,
@@ -122,12 +125,18 @@ def bars(table):
 
 def us_map(table):
     polygons = us_states()
-    fig, axes = plt.subplots(1, 2, figsize=(14, 4.9), facecolor=SURFACE)
+    fig, axes = plt.subplots(2, 2, figsize=(14, 9.4), facecolor=SURFACE)
     norm = Normalize(-0.4, 0.4)
-    for ax, (run, title) in zip(
-        axes, (("test", "all cells"), ("spatial_unseen", "unseen 2x2° blocks")), strict=True
-    ):
-        sub = table[(table.region == "us") & (table.run == run)].set_index("state")
+    panels = [
+        (model, run, f"{inputs}, {title}")
+        for model, inputs in (("us", "VCI only"), ("us+coords", "VCI + coordinates"))
+        for run, title in (("test", "all cells"), ("spatial_unseen", "unseen 2x2° blocks"))
+    ]
+    for ax, (model, run, title) in zip(axes.ravel(), panels, strict=True):
+        sub = table[(table.model == model) & (table.run == run)].set_index("state")
+        if sub.empty:
+            ax.axis("off")
+            continue
         for state, rings in polygons.items():
             value = sub.skill.get(state, np.nan)
             face = "#e6e5e0" if np.isnan(value) else SKILL_MAP(norm(value))
@@ -140,7 +149,7 @@ def us_map(table):
         ax.set_facecolor(SURFACE)
         overall = sub.loc["all trained states"]
         ax.set_title(
-            f"{title}: skill vs climatology (US overall {overall.skill:+.3f})",
+            f"{title}: skill (US overall {overall.skill:+.3f})",
             color=INK,
             fontsize=10,
             loc="left",
@@ -167,11 +176,11 @@ def main():
     table = summary(load())
     table.to_csv(METRICS / "comparison.csv", index=False)
     bars(table)
-    if (table.region == "us").any():
+    if (table.model == "us").any():
         us_map(table)
     view = table[table.state.isin([*FOCUS, "three states", "plains states", "all trained states"])]
     print(
-        view.pivot_table(index=["run", "state"], columns="region", values="skill")
+        view.pivot_table(index=["run", "state"], columns="model", values="skill")
         .round(3)
         .to_string()
     )
