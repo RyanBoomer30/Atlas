@@ -99,6 +99,8 @@ def aggregate_tile(tile_dir):
     )
     means = frame.groupby(["cell_lon", "cell_lat", "month"])[FLDAS_US_VARIABLES].mean()
     cells = sorted({(lon, lat) for lon, lat, _ in means.index})
+    if not cells:  # all-ocean tile
+        return [], np.zeros((0, len(MONTHS), len(FLDAS_US_VARIABLES)), np.float32)
     full = pd.MultiIndex.from_tuples([(lon, lat, m) for lon, lat in cells for m in MONTHS])
     values = means.reindex(full).to_numpy(np.float32).reshape(len(cells), len(MONTHS), -1)
     return cells, values
