@@ -215,6 +215,46 @@ Skill vs climatology, pooled 2021–2024 (per year in the figure):
 Raw: `metrics_vci_per_state/{kansas,texas,california}.csv`, comparison table
 `metrics_vci_per_state/comparison.csv`.
 
+## VCI + coordinates (`vci_coords.py`)
+
+Input: the daily VCI blocks plus the cell's latitude and longitude (standardized, constant
+over the 12 steps), so the model can learn a different VCI–soil-moisture mapping by
+location. Otherwise the tactics setup: three-state model, uniform weights, raw output,
+rolling origin 2021–2024, one epoch, seeds 42–44. Equivalence check PASS for every run.
+
+Skill vs climatology, pooled 2021–2024 (worst single year in brackets):
+
+| | All states | Kansas | Texas | California |
+|---|---|---|---|---|
+| 10–40 cm, VCI only | **0.066** (−0.10) | 0.000 | **0.094** | 0.055 |
+| 10–40 cm, VCI + coordinates | 0.020 (−0.21) | −0.001 | −0.021 | **0.150** |
+| 0–100 cm, VCI only | **0.044** (−0.28) | −0.088 | **0.080** | 0.074 |
+| 0–100 cm, VCI + coordinates | −0.005 (−0.37) | −0.035 | −0.084 | **0.195** |
+| 10–40 cm unseen blocks, VCI only | −0.009 | −0.387 | **0.128** | −0.082 |
+| 10–40 cm unseen blocks, VCI + coordinates | 0.001 | **0.094** | 0.004 | −0.021 |
+
+r² (timing) is equal or lower with coordinates almost everywhere (10–40 cm, all states:
+0.072 → 0.058).
+
+![VCI vs VCI + coordinates](figures_vci_coords/vci_vs_coords.png)
+
+- **No overall gain.** Coordinates lower pooled skill (0.066 → 0.020 for 10–40 cm,
+  0.044 → −0.005 for 0–100 cm) and deepen the worst year.
+- **They help where the relationship is different, and hurt where it was already shared.**
+  California improves strongly (10–40 cm 0.055 → 0.150; 0–100 cm 0.074 → 0.195), the same
+  state that did better with a model of its own. Texas loses most of its skill (0.094 →
+  −0.021).
+- **On unseen blocks, coordinates fix Kansas** (−0.39 → +0.09): the location tells the model
+  which regional mapping to apply to Kansas cells it never saw. Texas unseen falls
+  (0.13 → 0.00), and the overall is unchanged.
+- **Why Texas drops**: with coordinates the model can learn each location's average
+  anomaly in the training years. That is a level that drifts from period to period (the
+  offset problem), so locally memorized levels carry over into wrong test-year levels. Timing
+  skill (r²) also falls, a sign of overfitting location patterns in one epoch.
+- **Implication**: what coordinates buy here is mostly a regional switch. A separate model
+  per region (California vs the Plains) gets the California gain without costing Texas.
+  Coordinates would need stronger regularization, or a coarser region code, to help overall.
+
 ## Equivalence and runtimes
 
 `check_equivalence.run` on seed 42 of every variant: PASS (float32 and float64).
