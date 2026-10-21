@@ -85,7 +85,7 @@ def fit_one_epoch(samples, weights, seed, name, num_samples=None):
         replacement=True,
         generator=generator,
     )
-    model = D.RegularizedBiLSTM(1, D.HIDDEN, D.LR, WEIGHT_DECAY)
+    model = D.RegularizedBiLSTM(samples["x"].shape[2], D.HIDDEN, D.LR, WEIGHT_DECAY)
     trainer = L.Trainer(
         max_epochs=1,
         logger=CSVLogger(OUT / "logs", name=name),
