@@ -275,16 +275,22 @@ def build():
 def lst_composites():
     rows = []
     for path in sorted(MOD11C2_US_DIR.glob("*.npz")):
-        start = pd.Timestamp(path.stem.split("_")[1])
+        first = pd.Timestamp(path.stem.split("_")[1])
+        # A composite after a data gap reports its first day with data (e.g. 2016-02-28 after
+        # the Terra safe mode); its nominal 8-day slot starts on day 1, 9, 17, ... of the year.
+        doy = (first.dayofyear - 1) // 8 * 8 + 1
+        start = pd.Timestamp(year=first.year, month=1, day=1) + pd.Timedelta(days=doy - 1)
         rows.append(
             {
                 "start": start,
-                "doy": start.dayofyear,
+                "doy": doy,
                 "available": start + pd.Timedelta(days=LST_AVAILABLE_AFTER),
                 "path": path,
             }
         )
-    return pd.DataFrame(rows).sort_values("available").reset_index(drop=True)
+    table = pd.DataFrame(rows).sort_values("available").reset_index(drop=True)
+    assert not table.start.duplicated().any(), "two composites in one 8-day slot"
+    return table
 
 
 def composite_tci(table):
