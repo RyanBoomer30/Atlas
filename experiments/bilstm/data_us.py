@@ -272,9 +272,9 @@ def build():
     print(f"{len(cells)} cells in {len(per_state)} states, {len(table_c)} composites", flush=True)
 
 
-def lst_composites():
+def lst_composites(directory=MOD11C2_US_DIR):
     rows = []
-    for path in sorted(MOD11C2_US_DIR.glob("*.npz")):
+    for path in sorted(directory.glob("*.npz")):
         first = pd.Timestamp(path.stem.split("_")[1])
         # A composite after a data gap reports its first day with data (e.g. 2016-02-28 after
         # the Terra safe mode); its nominal 8-day slot starts on day 1, 9, 17, ... of the year.
@@ -293,15 +293,28 @@ def lst_composites():
     return table
 
 
-def composite_tci(table):
-    """TCI per pixel for every composite (computed in place over one LST stack)."""
-    first = np.load(table.path[0])["lst"]
+def load_lst(table, field="lst", qc_field="qc"):
+    """LST in K (composites, rows, cols), NaN where not produced or flagged bad."""
+    first = np.load(table.path[0])[field]
     stack = np.full((len(table), *first.shape), np.nan, np.float32)
     for i, path in enumerate(table.path):
         with np.load(path) as f:
-            lst, qc = f["lst"], f["qc"]
+            lst, qc = f[field], f[qc_field]
         good = np.isin(qc & 3, LST_GOOD_QC) & (lst > 0)
         stack[i] = np.where(good, lst * 0.02, np.nan)
+    return stack
+
+
+def composite_tci(table):
+    """TCI per pixel for every composite (computed in place over one LST stack)."""
+    return slot_index(load_lst(table), table)
+
+
+def slot_index(stack, table):
+    """In place: 100 (max - x) / (max - min) per pixel and 8-day slot, 2000-2014 min/max.
+
+    High x (a hot surface, or a wide day-night range) gives a low index.
+    """
     years = table.start.dt.year.to_numpy()
     in_stats = (years >= VCI_STATS_YEARS[0]) & (years <= VCI_STATS_YEARS[1])
     for _doy, group in table.groupby("doy"):

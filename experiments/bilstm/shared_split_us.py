@@ -12,6 +12,7 @@ DATA = REPO / ".atlas/data"
 FLDAS_US_DIR = DATA / "fldas_us"
 MOD13C1_US_DIR = DATA / "mod13c1_us"
 MOD11C2_US_DIR = DATA / "mod11c2_us"
+MYD11C2_US_DIR = DATA / "myd11c2_us"
 OUT_US_DIR = DATA / "vci_us"
 
 # W, S, E, N on 0.5 deg cell edges, so no cell is cut by the box.
