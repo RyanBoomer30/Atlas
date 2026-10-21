@@ -64,7 +64,9 @@ def missing_months(tile_dir):
     have = set()
     for path in tile_dir.glob("**/fldas.csv"):
         have |= set(pd.read_csv(path, usecols=["time"])["time"].str[:7])
-    want = {str(m) for m in pd.period_range(DATE_CHUNKS[0][0][:7], DATE_CHUNKS[-1][1][:7], "M")}
+    want = {
+        str(m) for m in pd.period_range(DATE_CHUNKS[0][0][:7], DATE_CHUNKS[-1][1][:7], freq="M")
+    }
     return sorted(want - have)
 
 
