@@ -255,6 +255,43 @@ r² (timing) is equal or lower with coordinates almost everywhere (10–40 cm, a
   per region (California vs the Plains) gets the California gain without costing Texas.
   Coordinates would need stronger regularization, or a coarser region code, to help overall.
 
+## Regional models: California alone, Kansas + Texas together (`vci_regional.py`)
+
+VCI-only input, 10–40 cm label, rolling origin 2021–2024, one epoch, seeds 42–44, and the
+same number of training draws as the three-state model. In the Plains model, Kansas and
+Texas are drawn in proportion to their effective independent cells. Unseen blocks are the
+same 8 as before. The California model reproduced the per-state California run exactly.
+Equivalence check PASS for all four runs.
+
+Skill vs climatology, pooled 2021–2024 (r² in brackets):
+
+| | All states | Kansas | Texas | California |
+|---|---|---|---|---|
+| Three-state, VCI only | **0.066** (0.070) | **0.000** (0.070) | **0.094** (0.095) | 0.055 (0.044) |
+| Three-state, VCI + coordinates | 0.020 (0.051) | −0.001 (0.044) | −0.021 (0.067) | **0.150** (0.043) |
+| Regional, VCI only | 0.036 (**0.074**) | −0.103 (**0.083**) | 0.062 (0.089) | 0.099 (**0.051**) |
+| Unseen blocks: three-state, VCI only | −0.009 | −0.387 | **0.128** | −0.082 |
+| Unseen blocks: three-state + coordinates | **0.001** | **0.094** | 0.004 | **−0.021** |
+| Unseen blocks: regional, VCI only | −0.035 | −0.409 | 0.090 | −0.096 |
+
+![Regional vs three-state](figures_vci_regional/regional_vs_pooled.png)
+
+- **Splitting by region does not beat one shared model** (0.036 vs 0.066 overall). California
+  gains (0.055 → 0.099), but Kansas (0.000 → −0.103) and Texas (0.094 → 0.062) lose.
+- **California's data was helping the Plains.** Removing it made the Kansas and Texas level
+  forecasts worse, even though timing (r²) improved slightly in Kansas (0.070 → 0.083). More
+  varied training years and regimes seem to steady the level, which is the hard part.
+- **Unseen Kansas blocks stay bad** with the regional model (−0.41): only coordinates fixed
+  them (+0.09).
+- **No single variant wins everywhere**: Texas is best with the three-state VCI-only model,
+  California with three-state + coordinates, Kansas unseen with coordinates. Picking a variant
+  per state from these test results would be selection on the test set; with only 4 test
+  years the differences between variants (about ±0.05 in pooled skill) are about the size of
+  year-to-year noise.
+- **Recommendation stands**: the three-state VCI-only model (10–40 cm label) is the best and
+  most robust overall. More regions of the same kind (more Plains states), rather than
+  splitting, is the more promising way to add data.
+
 ## Equivalence and runtimes
 
 `check_equivalence.run` on seed 42 of every variant: PASS (float32 and float64).
